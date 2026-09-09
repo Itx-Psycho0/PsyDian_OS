@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["kernel"]
+
+[package]
+name = "psydian"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }
+bootloader = { version = "0.11.17", default-features = false, features = ["bios"] }
