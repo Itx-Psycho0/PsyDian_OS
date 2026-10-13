@@ -9,9 +9,11 @@ use core::panic::PanicInfo;
 
 pub mod serial;
 pub mod vga_buffer;
+pub mod gdt;
 pub mod interrupts;
 
 pub fn init() {
+    gdt::init();
     interrupts::init_idt();
 }
 
