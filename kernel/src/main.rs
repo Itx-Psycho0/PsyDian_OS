@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(custom_test_frameworks)]
+#![feature(abi_x86_interrupt)]
 #![test_runner(kernel::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
@@ -16,6 +17,13 @@ fn kernel_main(_boot_info: &'static mut BootInfo) -> ! {
 
     println!("Hello World from Psydian OS!");
     println!("VGA text mode is working!");
+
+    kernel::init();
+
+    // invoke a breakpoint exception
+    x86_64::instructions::interrupts::int3();
+
+    println!("It did not crash!");
 
     #[cfg(test)]
     test_main();

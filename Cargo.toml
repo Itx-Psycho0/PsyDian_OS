@@ -2,6 +2,12 @@
 resolver = "3"
 members = ["kernel"]
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
 [package]
 name = "psydian"
 version = "0.1.0"
