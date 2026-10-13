@@ -19,6 +19,7 @@ volatile = "0.2.6"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
 x86_64 = "0.15.1"
 pic8259 = "0.11.0"
+noto-sans-mono-bitmap = { version = "0.3.1", default-features = false, features = ["regular", "size_16", "unicode-basic-latin"] }
 
 [package.metadata.bootimage]
 test-args = [

@@ -1,7 +1,7 @@
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode, Entry, HandlerFunc};
-use crate::{println, gdt, print, hlt_loop};
+use crate::{gdt, hlt_loop, print, println};
 use pic8259::ChainedPics;
 use spin;
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -32,24 +32,12 @@ lazy_static::lazy_static! {
                 .set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
-        
-        // Hardware interrupts - using raw memory manipulation since IDT doesn't expose indexing
-        unsafe {
-            use core::mem;
-            let idt_array = &mut idt as *mut InterruptDescriptorTable as *mut Entry<HandlerFunc>;
-            
-            // Timer interrupt (IRQ 0, vector 32)
-            let timer_idx = InterruptIndex::Timer.as_u8() as isize;
-            let timer_entry = Entry::missing();
-            core::ptr::write(idt_array.offset(timer_idx), timer_entry);
-            (*idt_array.offset(timer_idx)).set_handler_fn(timer_interrupt_handler);
-            
-            // Keyboard interrupt (IRQ 1, vector 33)
-            let keyboard_idx = InterruptIndex::Keyboard.as_u8() as isize;
-            let keyboard_entry = Entry::missing();
-            core::ptr::write(idt_array.offset(keyboard_idx), keyboard_entry);
-            (*idt_array.offset(keyboard_idx)).set_handler_fn(keyboard_interrupt_handler);
-        }
+
+        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+
+        // Hardware interrupts (IRQs). The IDT can be indexed directly by vector number.
+        idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_interrupt_handler);
+        idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
 
         idt
     };
@@ -59,9 +47,7 @@ pub fn init_idt() {
     IDT.load();
 }
 
-extern "x86-interrupt" fn timer_interrupt_handler(
-    _stack_frame: InterruptStackFrame)
-{
+extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     print!(".");
 
     unsafe {
@@ -70,9 +56,7 @@ extern "x86-interrupt" fn timer_interrupt_handler(
     }
 }
 
-extern "x86-interrupt" fn keyboard_interrupt_handler(
-    _stack_frame: InterruptStackFrame)
-{
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
 
     let mut port = Port::new(0x60);
@@ -85,9 +69,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(
     }
 }
 
-extern "x86-interrupt" fn breakpoint_handler(
-    stack_frame: InterruptStackFrame)
-{
+extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
     println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
@@ -104,9 +86,20 @@ extern "x86-interrupt" fn page_fault_handler(
     hlt_loop();
 }
 
+extern "x86-interrupt" fn general_protection_fault_handler(
+    stack_frame: InterruptStackFrame,
+    error_code: u64,
+) {
+    println!("EXCEPTION: GENERAL PROTECTION FAULT");
+    println!("Error Code (segment selector index): {:#x}", error_code);
+    println!("{:#?}", stack_frame);
+    hlt_loop();
+}
+
 extern "x86-interrupt" fn double_fault_handler(
-    stack_frame: InterruptStackFrame, _error_code: u64) -> !
-{
+    stack_frame: InterruptStackFrame,
+    _error_code: u64,
+) -> ! {
     panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 }
 

@@ -7,15 +7,22 @@
 
 use core::panic::PanicInfo;
 
-pub mod serial;
-pub mod vga_buffer;
+pub mod console;
+pub mod framebuffer;
 pub mod gdt;
 pub mod interrupts;
+pub mod serial;
 
 pub fn init() {
     gdt::init();
     interrupts::init_idt();
-    unsafe { interrupts::PICS.lock().initialize() };
+    unsafe {
+        let mut pics = interrupts::PICS.lock();
+        pics.initialize();
+        // Unmask only IRQ0 (timer) and IRQ1 (keyboard). Every other IRQ line
+        // stays masked because we have no handler installed for it yet.
+        pics.write_masks(0b1111_1100, 0b1111_1111);
+    }
     x86_64::instructions::interrupts::enable();
 }
 
@@ -72,7 +79,7 @@ pub fn exit_qemu(exit_code: QemuExitCode) {
 }
 
 #[cfg(test)]
-use bootloader_api::{entry_point, BootInfo};
+use bootloader_api::{BootInfo, entry_point};
 
 #[cfg(test)]
 entry_point!(test_kernel_main);
