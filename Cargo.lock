@@ -151,6 +151,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader_api",
  "lazy_static",
+ "pic8259",
  "spin",
  "uart_16550",
  "volatile 0.2.7",
@@ -223,6 +224,15 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pic8259"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62d9a86c292b165f757e47e7fd66855def189b2564609bc4203727b27c33db22"
+dependencies = [
+ "x86_64",
+]
 
 [[package]]
 name = "proc-macro2"

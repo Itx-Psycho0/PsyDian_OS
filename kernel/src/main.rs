@@ -20,22 +20,20 @@ fn kernel_main(_boot_info: &'static mut BootInfo) -> ! {
 
     kernel::init();
 
-    // invoke a breakpoint exception
-    x86_64::instructions::interrupts::int3();
-
     println!("It did not crash!");
 
     #[cfg(test)]
     test_main();
 
-    loop {}
+    println!("Waiting for interrupts...");
+    kernel::hlt_loop();
 }
 
 #[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
-    loop {}
+    kernel::hlt_loop();
 }
 
 #[cfg(test)]
