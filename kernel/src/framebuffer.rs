@@ -34,6 +34,16 @@ pub fn init(framebuffer: &'static mut FrameBuffer) {
     *WRITER.lock() = Some(writer);
 }
 
+/// Width and height of the screen in pixels, once the console is running.
+pub fn resolution() -> Option<(usize, usize)> {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        WRITER
+            .lock()
+            .as_ref()
+            .map(|writer| (writer.info.width, writer.info.height))
+    })
+}
+
 pub struct FrameBufferWriter {
     buffer: &'static mut [u8],
     info: FrameBufferInfo,
@@ -79,6 +89,30 @@ impl FrameBufferWriter {
         self.x = BORDER_PADDING;
     }
 
+    /// Number of characters that fit on one line.
+    fn columns(&self) -> usize {
+        self.info.width.saturating_sub(2 * BORDER_PADDING) / CHAR_WIDTH
+    }
+
+    /// Steps back one character cell and blanks it. At the start of a line it
+    /// continues at the end of the previous one, so a wrapped input line can
+    /// be erased completely.
+    fn backspace(&mut self) {
+        if self.x >= BORDER_PADDING + CHAR_WIDTH {
+            self.x -= CHAR_WIDTH;
+        } else if self.y >= BORDER_PADDING + Self::line_height() && self.columns() > 0 {
+            self.y -= Self::line_height();
+            self.x = BORDER_PADDING + (self.columns() - 1) * CHAR_WIDTH;
+        } else {
+            return; // already at the top-left corner
+        }
+        for dy in 0..CHAR_HEIGHT.val() {
+            for dx in 0..CHAR_WIDTH {
+                self.write_pixel(self.x + dx, self.y + dy, 0);
+            }
+        }
+    }
+
     /// Moves every pixel row up by one text line and blanks the freed bottom line.
     /// Returns `false` if scrolling was impossible (so callers can't loop forever).
     fn scroll_up_one_line(&mut self) -> bool {
@@ -99,6 +133,7 @@ impl FrameBufferWriter {
         match c {
             '\n' => self.newline(),
             '\r' => self.carriage_return(),
+            '\u{8}' => self.backspace(),
             c => {
                 let next_x = self.x + CHAR_WIDTH;
                 if next_x + BORDER_PADDING > self.info.width {
