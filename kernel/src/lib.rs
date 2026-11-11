@@ -24,6 +24,7 @@ pub mod logger;
 pub mod memory;
 pub mod ring;
 pub mod serial;
+pub mod shell;
 pub mod time;
 
 /// What the kernel asks of the bootloader. Every entry point (the kernel
