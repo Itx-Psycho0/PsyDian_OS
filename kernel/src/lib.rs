@@ -14,10 +14,12 @@ pub mod gdt;
 pub mod interrupts;
 pub mod ring;
 pub mod serial;
+pub mod time;
 
 pub fn init() {
     gdt::init();
     interrupts::init_idt();
+    time::init();
     unsafe {
         let mut pics = interrupts::PICS.lock();
         pics.initialize();
