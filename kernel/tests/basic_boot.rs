@@ -13,7 +13,7 @@ entry_point!(main);
 fn main(_boot_info: &'static mut BootInfo) -> ! {
     kernel::serial::init();
     test_main();
-    loop {}
+    kernel::hlt_loop();
 }
 
 #[panic_handler]

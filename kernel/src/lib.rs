@@ -89,7 +89,7 @@ fn test_kernel_main(_boot_info: &'static mut BootInfo) -> ! {
     serial::init();
     init();
     test_main();
-    loop {}
+    hlt_loop();
 }
 
 #[cfg(test)]

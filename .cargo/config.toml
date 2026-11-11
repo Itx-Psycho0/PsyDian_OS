@@ -1,2 +1,11 @@
 [unstable]
 bindeps = true
+
+# Kernel executables cannot run on the host. Cargo hands them to the launcher
+# in `src/main.rs`, which wraps them in a boot image and starts QEMU.
+[target.x86_64-unknown-none]
+runner = "cargo run --quiet --package psydian --"
+
+[alias]
+# Runs every kernel unit and integration test inside QEMU.
+ktest = "test --package kernel --target x86_64-unknown-none"
