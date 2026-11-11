@@ -12,6 +12,7 @@ pub mod fixed;
 pub mod framebuffer;
 pub mod gdt;
 pub mod interrupts;
+pub mod logger;
 pub mod ring;
 pub mod serial;
 pub mod time;
