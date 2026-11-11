@@ -15,6 +15,7 @@ use logger::Subsystem;
 
 pub mod allocator;
 pub mod console;
+pub mod diagnostics;
 pub mod fixed;
 pub mod framebuffer;
 pub mod gdt;
@@ -22,6 +23,8 @@ pub mod input;
 pub mod interrupts;
 pub mod logger;
 pub mod memory;
+pub mod panic;
+pub mod protocol;
 pub mod ring;
 pub mod serial;
 pub mod shell;

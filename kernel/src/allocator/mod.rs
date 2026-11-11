@@ -219,12 +219,26 @@ unsafe impl GlobalAlloc for Locked<FixedSizeBlockAllocator> {
     }
 }
 
+/// Called by `alloc` when an allocation that cannot fail (`Box::new`,
+/// `Vec::push`, ...) gets a null pointer. There is no way to continue, so the
+/// kernel stops with a MEM-003 diagnostic.
 #[alloc_error_handler]
 fn alloc_error_handler(layout: Layout) -> ! {
-    panic!(
-        "heap allocation failed: size={} align={}",
-        layout.size(),
-        layout.align()
+    use crate::diagnostics::Diagnostic;
+    use crate::logger::{Level, Subsystem};
+
+    let heap = stats();
+    crate::panic::raise(
+        Diagnostic::new(
+            Level::Panic,
+            Subsystem::Memory,
+            "MEM-003",
+            format_args!("Heap allocation failed"),
+        )
+        .with("size", layout.size())
+        .with("align", layout.align())
+        .with("heap_size", heap.size)
+        .with("heap_used", heap.used),
     );
 }
 

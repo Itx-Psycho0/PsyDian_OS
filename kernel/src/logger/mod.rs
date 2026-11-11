@@ -73,7 +73,8 @@ impl Level {
 
 impl fmt::Display for Level {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        // `pad` honours width and alignment (`{:<10}`), which tables rely on.
+        f.pad(self.as_str())
     }
 }
 
@@ -125,7 +126,8 @@ impl Subsystem {
 
 impl fmt::Display for Subsystem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        // `pad` honours width and alignment (`{:<10}`), which tables rely on.
+        f.pad(self.as_str())
     }
 }
 
