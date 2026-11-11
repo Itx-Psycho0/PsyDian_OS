@@ -359,6 +359,42 @@ PANIC-001 Kernel panic
 
 The exact code registry will be finalized as the implementation grows.
 
+### Codes Implemented in the Kernel
+
+Log lines use the format `[LEVEL][SUBSYSTEM][CODE] message`. Codes marked *diagnostic* also produce a structured diagnostic record and a protocol frame.
+
+| Code | Level | Meaning |
+|---|---|---|
+| `BOOT-001` | INFO | Kernel booted |
+| `BOOT-002` | INFO | Framebuffer console initialized |
+| `BOOT-003` | WARN | No framebuffer provided; serial output only |
+| `BOOT-004` | INFO | Boot complete |
+| `SER-001` | INFO | Serial port COM1 initialized |
+| `INT-001` | INFO | GDT, TSS and IDT loaded |
+| `INT-002` | INFO | Hardware interrupts enabled |
+| `MEM-001` | ERROR | Memory initialization failed (kernel continues without a heap) |
+| `MEM-003` | ERROR / PANIC | Heap allocation failed (*diagnostic*) |
+| `MEM-010` | INFO | Memory map summary |
+| `MEM-011` | INFO | Paging initialized |
+| `MEM-012` | INFO | Kernel heap initialized |
+| `INPUT-001` | INFO | Keyboard and serial input ready |
+| `SHELL-001` | INFO | Shell started |
+| `CMD-001` | WARN | Invalid or unknown command |
+| `CMD-002` | WARN | Wrong number of command arguments |
+| `CMD-003` | WARN | Command reported an error |
+| `CMD-004` | INFO | Command cancelled at the confirmation prompt |
+| `CMD-010` | INFO | Command executed |
+| `COMM-001` | ERROR | Message did not fit into a protocol frame and was not sent |
+| `EXC-000` | PANIC | Divide error (*diagnostic*) |
+| `EXC-003` | INFO | Breakpoint; execution continues (*diagnostic*) |
+| `EXC-006` | PANIC | Invalid opcode (*diagnostic*) |
+| `EXC-008` | PANIC | Double fault, typically a kernel stack overflow (*diagnostic*) |
+| `EXC-013` | PANIC | General protection fault (*diagnostic*) |
+| `EXC-014` | PANIC | Page fault (*diagnostic*) |
+| `PANIC-001` | PANIC | Kernel panic (*diagnostic*) |
+
+`CMD-*` events are stored in the log history (shown by the `logs` command) without being printed, because the shell already shows its own message for them.
+
 ---
 
 # 12. Metrics
