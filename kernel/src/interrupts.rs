@@ -1,4 +1,6 @@
-use crate::{gdt, hlt_loop, println};
+use crate::diagnostics::{self, Diagnostic};
+use crate::gdt;
+use crate::logger::{Level, Subsystem};
 use pic8259::ChainedPics;
 use spin;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -27,7 +29,9 @@ impl InterruptIndex {
 lazy_static::lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
+        idt.divide_error.set_handler_fn(divide_error_handler);
         idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
         idt.page_fault.set_handler_fn(page_fault_handler);
         unsafe {
             idt.double_fault
@@ -81,8 +85,56 @@ extern "x86-interrupt" fn serial_interrupt_handler(_stack_frame: InterruptStackF
     }
 }
 
+/// Common context for exception diagnostics: where the CPU was.
+fn exception_diagnostic(
+    severity: Level,
+    code: &'static str,
+    message: &'static str,
+    stack_frame: &InterruptStackFrame,
+) -> Diagnostic {
+    Diagnostic::new(
+        severity,
+        Subsystem::Interrupt,
+        code,
+        format_args!("{}", message),
+    )
+    .with(
+        "rip",
+        format_args!("{:#x}", stack_frame.instruction_pointer.as_u64()),
+    )
+    .with(
+        "rsp",
+        format_args!("{:#x}", stack_frame.stack_pointer.as_u64()),
+    )
+}
+
+/// #BP is the one exception that is not an error: execution continues after
+/// the `int3` instruction.
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
-    println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
+    diagnostics::report(exception_diagnostic(
+        Level::Info,
+        "EXC-003",
+        "Breakpoint exception",
+        &stack_frame,
+    ));
+}
+
+extern "x86-interrupt" fn divide_error_handler(stack_frame: InterruptStackFrame) {
+    crate::panic::raise(exception_diagnostic(
+        Level::Panic,
+        "EXC-000",
+        "Divide error during kernel execution",
+        &stack_frame,
+    ));
+}
+
+extern "x86-interrupt" fn invalid_opcode_handler(stack_frame: InterruptStackFrame) {
+    crate::panic::raise(exception_diagnostic(
+        Level::Panic,
+        "EXC-006",
+        "Invalid opcode during kernel execution",
+        &stack_frame,
+    ));
 }
 
 extern "x86-interrupt" fn page_fault_handler(
@@ -91,32 +143,79 @@ extern "x86-interrupt" fn page_fault_handler(
 ) {
     use x86_64::registers::control::Cr2;
 
-    println!("EXCEPTION: PAGE FAULT");
-    println!("Accessed Address: {:?}", Cr2::read());
-    println!("Error Code: {:?}", error_code);
-    println!("{:#?}", stack_frame);
-    hlt_loop();
+    let diagnostic = exception_diagnostic(
+        Level::Panic,
+        "EXC-014",
+        "Page fault during kernel execution",
+        &stack_frame,
+    );
+    // CR2 holds the address whose access faulted.
+    let diagnostic = match Cr2::read() {
+        Ok(address) => diagnostic.with("address", format_args!("{:#x}", address.as_u64())),
+        Err(_) => diagnostic.with("address", "non-canonical"),
+    };
+    let access = if error_code.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+        "execute"
+    } else if error_code.contains(PageFaultErrorCode::CAUSED_BY_WRITE) {
+        "write"
+    } else {
+        "read"
+    };
+    let cause = if error_code.contains(PageFaultErrorCode::PROTECTION_VIOLATION) {
+        "protection violation"
+    } else {
+        "page not present"
+    };
+    crate::panic::raise(
+        diagnostic
+            .with("access", access)
+            .with("cause", cause)
+            .with("error_code", format_args!("{:#x}", error_code.bits())),
+    );
 }
 
 extern "x86-interrupt" fn general_protection_fault_handler(
     stack_frame: InterruptStackFrame,
     error_code: u64,
 ) {
-    println!("EXCEPTION: GENERAL PROTECTION FAULT");
-    println!("Error Code (segment selector index): {:#x}", error_code);
-    println!("{:#?}", stack_frame);
-    hlt_loop();
+    crate::panic::raise(
+        exception_diagnostic(
+            Level::Panic,
+            "EXC-013",
+            "General protection fault during kernel execution",
+            &stack_frame,
+        )
+        // Non-zero: the segment selector the fault relates to.
+        .with("error_code", format_args!("{:#x}", error_code)),
+    );
 }
 
+/// Runs on its own stack (IST), so it still works when the kernel stack has
+/// overflowed, which is the usual way to get here.
 extern "x86-interrupt" fn double_fault_handler(
     stack_frame: InterruptStackFrame,
     _error_code: u64,
 ) -> ! {
-    panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
+    crate::panic::raise(
+        exception_diagnostic(
+            Level::Panic,
+            "EXC-008",
+            "Double fault during kernel execution",
+            &stack_frame,
+        )
+        .with("hint", "often caused by a kernel stack overflow"),
+    );
 }
 
 #[test_case]
-fn test_breakpoint_exception() {
-    // invoke a breakpoint exception
+fn breakpoint_exception_returns_and_is_recorded() {
+    let reported = diagnostics::total_reported();
     x86_64::instructions::interrupts::int3();
+    // Reaching this line proves the handler returned.
+    assert_eq!(diagnostics::total_reported(), reported + 1);
+
+    let record = diagnostics::last().expect("breakpoint must leave a diagnostic");
+    assert_eq!(record.code, "EXC-003");
+    assert_eq!(record.severity, Level::Info);
+    assert!(record.context_value("rip").is_some());
 }

@@ -9,6 +9,7 @@
 
 use super::Shell;
 use super::parser::ParsedCommand;
+use crate::diagnostics::{self, Diagnostic, DiagnosticId};
 use crate::logger::{self, Level};
 use crate::{print, println};
 use core::fmt;
@@ -125,6 +126,15 @@ pub static COMMANDS: &[Command] = &[
         handler: logs,
     },
     Command {
+        name: "diag",
+        usage: "diag [list | last | <number> | send <number|last>]",
+        summary: "Show or re-send structured diagnostic records",
+        min_args: 0,
+        max_args: 2,
+        confirmation: None,
+        handler: diag,
+    },
+    Command {
         name: "ai",
         usage: "ai <question...>",
         summary: "Ask the AI assistant (needs the host AI Bridge)",
@@ -141,6 +151,17 @@ pub static COMMANDS: &[Command] = &[
         max_args: 0,
         confirmation: Some("This deliberately crashes the kernel. A restart is required afterwards."),
         handler: panic_test,
+    },
+    Command {
+        name: "fault-test",
+        usage: "fault-test <breakpoint|heap|page-fault|divide-by-zero|invalid-opcode|stack-overflow>",
+        summary: "Trigger a controlled failure to exercise diagnostics",
+        min_args: 1,
+        max_args: 1,
+        confirmation: Some(
+            "This injects a real fault. Every scenario except 'breakpoint' and 'heap' halts the kernel.",
+        ),
+        handler: fault_test,
     },
     Command {
         name: "shutdown",
@@ -353,17 +374,162 @@ fn logs(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
     Ok(())
 }
 
-fn ai(_shell: &mut Shell, _command: &ParsedCommand) -> CommandResult {
-    // The kernel never talks to an AI service itself. Requests will travel
-    // over the serial diagnostic channel to the host-side AI Bridge; until
-    // that exists the command fails cleanly and the shell stays usable.
+/// Parses `last` or a diagnostic number (`3`, `diag-003`).
+fn select_diagnostic(selector: &str) -> Result<Diagnostic, CommandError> {
+    if selector == "last" {
+        return diagnostics::last().ok_or(CommandError::Unavailable(
+            "No diagnostic information available.",
+        ));
+    }
+    let number = selector
+        .strip_prefix("diag-")
+        .unwrap_or(selector)
+        .parse::<u32>()
+        .map_err(|_| CommandError::InvalidArguments("expected 'last' or a diagnostic number"))?;
+    diagnostics::find(number).ok_or(CommandError::Unavailable(
+        "No such diagnostic (never reported, or no longer in the history).",
+    ))
+}
+
+fn diag(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
+    match (command.arg(0), command.arg(1)) {
+        (None, None) | (Some("list"), None) => {
+            let stored = diagnostics::history_len();
+            if stored == 0 {
+                println!("No diagnostic information available.");
+                return Ok(());
+            }
+            println!(
+                "{} diagnostic record(s) reported since boot, {} stored:",
+                diagnostics::total_reported(),
+                stored
+            );
+            for record in (0..stored).filter_map(diagnostics::history_get) {
+                println!(
+                    "  {}  {:<5} {:<10} {:<9} {}",
+                    DiagnosticId(record.id),
+                    record.severity,
+                    record.subsystem,
+                    record.code,
+                    record.message
+                );
+            }
+            println!("Type 'diag <number>' for details.");
+            Ok(())
+        }
+        (Some("send"), Some(selector)) => {
+            let record = select_diagnostic(selector)?;
+            if !crate::protocol::send_diagnostic(&record) {
+                return Err(CommandError::Unavailable(
+                    "Diagnostic communication failed: record does not fit into a frame.",
+                ));
+            }
+            println!("{} sent to the diagnostic channel.", DiagnosticId(record.id));
+            Ok(())
+        }
+        (Some(selector), None) => {
+            println!("{}", select_diagnostic(selector)?);
+            Ok(())
+        }
+        _ => Err(CommandError::InvalidArguments("unexpected extra argument")),
+    }
+}
+
+fn ai(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
+    // The kernel never talks to an AI service itself. The question goes out
+    // as an `ai_request` frame on the serial diagnostic channel, where the
+    // host-side AI Bridge picks it up. The most recent diagnostic is
+    // referenced so "why did that happen?" has something to refer to.
+    let related = diagnostics::last().map(|record| DiagnosticId(record.id));
+    let request = crate::protocol::send_ai_request(command.rest, related).ok_or(
+        CommandError::Unavailable("Diagnostic communication failed: request is too long."),
+    )?;
+    println!("[AI] Request {} sent to the AI Bridge.", request);
+
+    // Receiving `ai_response` frames is part of the AI Bridge milestone. Until
+    // then the command reports the missing answer and the shell carries on.
     Err(CommandError::Unavailable(
-        "AI assistance unavailable: the host AI Bridge is not connected.",
+        "AI assistance unavailable: no response from the AI Bridge.",
     ))
 }
 
 fn panic_test(_shell: &mut Shell, _command: &ParsedCommand) -> CommandResult {
     panic!("controlled panic requested with the 'panic-test' shell command");
+}
+
+fn fault_test(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
+    match command.arg(0).unwrap_or("") {
+        // Recoverable: the handler records a diagnostic and execution continues.
+        "breakpoint" => {
+            x86_64::instructions::interrupts::int3();
+            println!("Breakpoint handled; the kernel kept running.");
+            Ok(())
+        }
+        // Recoverable: a request far larger than the heap fails with a null
+        // pointer, which is reported as a diagnostic instead of a crash.
+        "heap" => {
+            const REQUEST: usize = 64 * 1024 * 1024;
+            let layout = core::alloc::Layout::from_size_align(REQUEST, 8)
+                .map_err(|_| CommandError::Unavailable("Could not build the test allocation."))?;
+            let pointer = unsafe { alloc::alloc::alloc(layout) };
+            if !pointer.is_null() {
+                unsafe { alloc::alloc::dealloc(pointer, layout) };
+                println!("Allocation unexpectedly succeeded; no failure to report.");
+                return Ok(());
+            }
+            let heap = crate::allocator::stats();
+            diagnostics::report(
+                Diagnostic::new(
+                    Level::Error,
+                    crate::logger::Subsystem::Memory,
+                    "MEM-003",
+                    format_args!("Heap allocation failed"),
+                )
+                .with("size", REQUEST)
+                .with("align", 8)
+                .with("heap_size", heap.size)
+                .with("heap_used", heap.used),
+            );
+            println!("Allocation failure handled; the kernel kept running.");
+            Ok(())
+        }
+        "page-fault" => {
+            // Nothing is mapped at this address.
+            let unmapped = 0xdead_beef_000_u64 as *mut u8;
+            unsafe { unmapped.write_volatile(42) };
+            Ok(())
+        }
+        "divide-by-zero" => {
+            // Rust checks integer division itself, so the CPU exception has
+            // to be provoked with the instruction directly.
+            unsafe {
+                core::arch::asm!(
+                    "div {divisor}",
+                    divisor = in(reg) 0u64,
+                    inout("rax") 1u64 => _,
+                    inout("rdx") 0u64 => _,
+                );
+            }
+            Ok(())
+        }
+        "invalid-opcode" => {
+            unsafe { core::arch::asm!("ud2") };
+            Ok(())
+        }
+        "stack-overflow" => {
+            overflow_stack(0);
+            Ok(())
+        }
+        _ => Err(CommandError::InvalidArguments("unknown fault scenario")),
+    }
+}
+
+/// Recurses until the kernel stack hits its guard page.
+#[allow(unconditional_recursion)]
+fn overflow_stack(depth: u64) -> u64 {
+    let padding = [depth; 64];
+    // The use after the call keeps the compiler from turning this into a loop.
+    overflow_stack(depth + 1) + core::hint::black_box(padding)[0]
 }
 
 fn shutdown(_shell: &mut Shell, _command: &ParsedCommand) -> CommandResult {
@@ -410,6 +576,7 @@ fn roadmap_commands_exist() {
 #[test_case]
 fn destructive_commands_require_confirmation() {
     assert!(find("panic-test").unwrap().confirmation.is_some());
+    assert!(find("fault-test").unwrap().confirmation.is_some());
     assert!(find("help").unwrap().confirmation.is_none());
 }
 

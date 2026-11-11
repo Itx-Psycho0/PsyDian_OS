@@ -251,7 +251,56 @@ STATUS
 }
 ```
 
-The final protocol encoding and framing rules will be finalized during implementation.
+## 8.5 Framing and Encoding (Implemented, Kernel Side)
+
+The kernel side of the protocol is implemented in `kernel/src/protocol/`.
+
+**Transport.** Messages travel over the first serial port (COM1, 38400 baud, 8N1). In QEMU this is the `-serial` device, so the AI Bridge can attach to it through stdio, a PTY, or a socket.
+
+**Framing.** The same serial line also carries ordinary console text (boot logs, shell prompt and output). A protocol message is therefore sent as a *frame*:
+
+```text
+@PSY <JSON envelope>\n
+```
+
+- A frame starts at the marker `@PSY ` (including the space) and ends at the next line feed.
+- Everything on the serial line that is not part of a frame is human-readable console output and must be ignored by the bridge.
+- The envelope is a single line of UTF-8 JSON. Strings are escaped, so a frame never contains a raw line break.
+- An encoded message is at most 2048 bytes. The kernel drops a larger message instead of sending truncated JSON.
+- The bridge should look for the marker anywhere in a line, not only at its start, because a frame may be written while the cursor is at the shell prompt.
+
+**Messages the kernel sends.**
+
+Diagnostic record (sent whenever a diagnostic is reported, and again on `diag send`):
+
+```json
+{"type":"diagnostic","version":1,"id":"diag-002","payload":{"severity":"error","subsystem":"memory","code":"MEM-003","uptime_ms":2070,"message":"Heap allocation failed","context":{"size":"67108864","align":"8","heap_size":"1048576","heap_used":"0"}}}
+```
+
+| Payload field | Meaning |
+|---|---|
+| `severity` | `info`, `warn`, `error` or `panic` |
+| `subsystem` | `boot`, `kernel`, `memory`, `interrupt`, `input`, `serial`, `shell`, `diagnostic` or `ai` |
+| `code` | Stable error code (see Docs/14-observability.md, section 11) |
+| `uptime_ms` | Milliseconds since boot when the record was created |
+| `message` | Human-readable description |
+| `context` | Object of string keys and string values; may be empty |
+
+AI request (sent by the `ai <question>` shell command):
+
+```json
+{"type":"ai_request","version":1,"id":"req-001","payload":{"query":"why did the heap allocation fail?","diagnostic_id":"diag-002"}}
+```
+
+`diagnostic_id` names the most recent diagnostic record, or is `null` when none exists.
+
+Status (sent once when the shell is ready for input):
+
+```json
+{"type":"status","version":1,"id":"stat-001","payload":{"state":"ready","kernel":"0.1.0","uptime_ms":20}}
+```
+
+**Messages the kernel receives.** Serial input is already interrupt-driven and feeds the shell, but the kernel does not parse `ai_response` / `error` frames yet. That is part of the AI Bridge milestone; until then `ai` reports that no response arrived and the shell continues normally.
 
 ---
 

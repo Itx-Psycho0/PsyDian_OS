@@ -34,3 +34,12 @@ harness = false
 [[test]]
 name = "stack_overflow"
 harness = false
+
+# Each of these ends in a kernel panic, which is the thing under test.
+[[test]]
+name = "panic_diagnostic"
+harness = false
+
+[[test]]
+name = "page_fault_diagnostic"
+harness = false
