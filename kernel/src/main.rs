@@ -1,8 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(custom_test_frameworks)]
-#![test_runner(kernel::test_runner)]
-#![reexport_test_harness_main = "test_main"]
 
 use bootloader_api::{BootInfo, entry_point};
 use core::panic::PanicInfo;
@@ -32,22 +29,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     println!("It did not crash!");
 
-    #[cfg(test)]
-    test_main();
-
     println!("Waiting for interrupts...");
     kernel::hlt_loop();
 }
 
-#[cfg(not(test))]
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     println!("{}", info);
     kernel::hlt_loop();
-}
-
-#[cfg(test)]
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    kernel::test_panic_handler(info)
 }

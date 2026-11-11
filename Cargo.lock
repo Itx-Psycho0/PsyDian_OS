@@ -151,6 +151,7 @@ version = "0.1.0"
 dependencies = [
  "bootloader_api",
  "lazy_static",
+ "noto-sans-mono-bitmap",
  "pic8259",
  "spin",
  "uart_16550",
@@ -218,6 +219,12 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "noto-sans-mono-bitmap"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f102c477fd4ec864c149803bf606ecc23bc9329602ec0f99073a728abf454abc"
 
 [[package]]
 name = "once_cell"

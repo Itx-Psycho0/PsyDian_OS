@@ -13,8 +13,12 @@ name = "psydian"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
+default-run = "psydian"
 
+# The root package is the host-side launcher: `cargo run` boots the kernel image
+# in QEMU, and it is also the runner cargo uses for the kernel's tests.
 [dependencies]
+bootloader = { version = "0.11.17", default-features = false, features = ["bios"] }
 
 [build-dependencies]
 kernel = { path = "kernel", artifact = "bin", target = "x86_64-unknown-none" }

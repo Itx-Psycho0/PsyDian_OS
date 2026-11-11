@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+use bootloader_api::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 use lazy_static::lazy_static;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
@@ -29,14 +30,15 @@ extern "x86-interrupt" fn test_double_fault_handler(
 ) -> ! {
     kernel::serial_println!("[ok]");
     kernel::exit_qemu(kernel::QemuExitCode::Success);
-    loop {}
+    kernel::hlt_loop();
 }
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
+entry_point!(main);
+
+fn main(_boot_info: &'static mut BootInfo) -> ! {
+    kernel::serial::init();
     kernel::serial_print!("stack_overflow::stack_overflow...\t");
 
-    kernel::serial::init();
     kernel::gdt::init();
     init_test_idt();
 
