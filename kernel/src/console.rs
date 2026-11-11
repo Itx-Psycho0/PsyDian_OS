@@ -3,6 +3,9 @@
 //! Every message goes to the serial port (visible with `-serial stdio`, and the
 //! only output that survives a crash very early in boot) and, once
 //! [`crate::framebuffer::init`] has run, also to the screen.
+//!
+//! Printing the backspace character (`\u{8}`) erases the previous character
+//! on both outputs, which is what the shell's line editor relies on.
 
 use core::fmt::{self, Write};
 
@@ -27,6 +30,17 @@ pub fn _print(args: fmt::Arguments) {
         let _ = crate::serial::SERIAL1.lock().write_fmt(args);
         if let Some(writer) = crate::framebuffer::WRITER.lock().as_mut() {
             let _ = writer.write_fmt(args);
+        }
+    });
+}
+
+/// Clears the screen and, on the serial terminal, the terminal window.
+pub fn clear() {
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        // ANSI: erase the whole display, then move the cursor to the top left.
+        let _ = crate::serial::SERIAL1.lock().write_str("\x1b[2J\x1b[H");
+        if let Some(writer) = crate::framebuffer::WRITER.lock().as_mut() {
+            writer.clear();
         }
     });
 }
