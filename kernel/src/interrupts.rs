@@ -1,4 +1,4 @@
-use crate::{gdt, hlt_loop, print, println};
+use crate::{gdt, hlt_loop, println};
 use pic8259::ChainedPics;
 use spin;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -14,6 +14,8 @@ pub static PICS: spin::Mutex<ChainedPics> =
 pub enum InterruptIndex {
     Timer = PIC_1_OFFSET,
     Keyboard,
+    /// COM1 is wired to IRQ 4.
+    Serial = PIC_1_OFFSET + 4,
 }
 
 impl InterruptIndex {
@@ -38,6 +40,7 @@ lazy_static::lazy_static! {
         // Hardware interrupts (IRQs). The IDT can be indexed directly by vector number.
         idt[InterruptIndex::Timer.as_u8()].set_handler_fn(timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_u8()].set_handler_fn(keyboard_interrupt_handler);
+        idt[InterruptIndex::Serial.as_u8()].set_handler_fn(serial_interrupt_handler);
 
         idt
     };
@@ -57,15 +60,24 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    use x86_64::instructions::port::Port;
-
-    let mut port = Port::new(0x60);
-    let scancode: u8 = unsafe { port.read() };
-    print!("{}", scancode);
+    let scancode = crate::input::keyboard::read_scancode();
+    crate::input::keyboard::handle_scancode(scancode);
 
     unsafe {
         PICS.lock()
             .notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+    }
+}
+
+extern "x86-interrupt" fn serial_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // One interrupt can stand for several bytes in the UART's FIFO.
+    while let Some(byte) = crate::serial::try_read_byte() {
+        crate::input::serial::handle_byte(byte);
+    }
+
+    unsafe {
+        PICS.lock()
+            .notify_end_of_interrupt(InterruptIndex::Serial.as_u8());
     }
 }
 
