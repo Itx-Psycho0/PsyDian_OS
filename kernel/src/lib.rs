@@ -8,14 +8,19 @@
 use core::panic::PanicInfo;
 
 pub mod console;
+pub mod fixed;
 pub mod framebuffer;
 pub mod gdt;
 pub mod interrupts;
+pub mod logger;
+pub mod ring;
 pub mod serial;
+pub mod time;
 
 pub fn init() {
     gdt::init();
     interrupts::init_idt();
+    time::init();
     unsafe {
         let mut pics = interrupts::PICS.lock();
         pics.initialize();
