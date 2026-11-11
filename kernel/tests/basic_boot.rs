@@ -8,7 +8,7 @@ use core::panic::PanicInfo;
 use kernel::println;
 use bootloader_api::{entry_point, BootInfo};
 
-entry_point!(main);
+entry_point!(main, config = &kernel::BOOTLOADER_CONFIG);
 
 fn main(_boot_info: &'static mut BootInfo) -> ! {
     kernel::serial::init();

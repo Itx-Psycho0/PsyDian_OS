@@ -7,7 +7,7 @@ use bootloader_api::{BootInfo, entry_point};
 use core::panic::PanicInfo;
 use kernel::{QemuExitCode, exit_qemu, serial_print, serial_println};
 
-entry_point!(main);
+entry_point!(main, config = &kernel::BOOTLOADER_CONFIG);
 
 fn main(_boot_info: &'static mut BootInfo) -> ! {
     kernel::serial::init();
