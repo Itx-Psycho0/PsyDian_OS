@@ -339,10 +339,60 @@ fn bad_argument_values_fail_cleanly() {
 }
 
 #[test_case]
-fn ai_fails_without_breaking_the_shell() {
+fn ai_request_is_sent_and_failure_does_not_break_the_shell() {
     let mut shell = Shell::new();
+    let frames = crate::protocol::frames_sent();
     assert_eq!(shell.execute("ai why did the kernel panic?"), Outcome::Failed);
+    // The request left the kernel as a protocol frame ...
+    assert_eq!(crate::protocol::frames_sent(), frames + 1);
+    // ... and with no bridge answering, the shell simply carries on.
     assert_eq!(shell.execute("help"), Outcome::Executed);
+}
+
+#[test_case]
+fn recoverable_faults_produce_diagnostics_and_return() {
+    let mut shell = Shell::new();
+    input::clear();
+
+    let reported = crate::diagnostics::total_reported();
+    type_text("y\n");
+    assert_eq!(shell.execute("fault-test breakpoint"), Outcome::Executed);
+    assert_eq!(crate::diagnostics::total_reported(), reported + 1);
+    assert_eq!(crate::diagnostics::last().unwrap().code, "EXC-003");
+
+    type_text("yes\n");
+    assert_eq!(shell.execute("fault-test heap"), Outcome::Executed);
+    let record = crate::diagnostics::last().unwrap();
+    assert_eq!(record.code, "MEM-003");
+    assert_eq!(record.severity, Level::Error);
+    assert_eq!(record.message, "Heap allocation failed");
+    assert!(record.context_value("size").is_some());
+
+    type_text("y\n");
+    assert_eq!(shell.execute("fault-test nonsense"), Outcome::Failed);
+    type_text("n\n");
+    assert_eq!(shell.execute("fault-test page-fault"), Outcome::Cancelled);
+    assert_eq!(shell.execute("fault-test"), Outcome::InvalidArguments);
+}
+
+#[test_case]
+fn diag_command_shows_and_resends_records() {
+    let mut shell = Shell::new();
+    input::clear();
+    type_text("y\n");
+    assert_eq!(shell.execute("fault-test breakpoint"), Outcome::Executed);
+
+    assert_eq!(shell.execute("diag"), Outcome::Executed);
+    assert_eq!(shell.execute("diag list"), Outcome::Executed);
+    assert_eq!(shell.execute("diag last"), Outcome::Executed);
+
+    let frames = crate::protocol::frames_sent();
+    assert_eq!(shell.execute("diag send last"), Outcome::Executed);
+    assert_eq!(crate::protocol::frames_sent(), frames + 1);
+
+    assert_eq!(shell.execute("diag 999999"), Outcome::Failed);
+    assert_eq!(shell.execute("diag bogus"), Outcome::Failed);
+    assert_eq!(shell.execute("diag send"), Outcome::Failed);
 }
 
 #[test_case]
