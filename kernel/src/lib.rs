@@ -18,6 +18,7 @@ pub mod console;
 pub mod fixed;
 pub mod framebuffer;
 pub mod gdt;
+pub mod input;
 pub mod interrupts;
 pub mod logger;
 pub mod memory;
@@ -112,16 +113,21 @@ pub fn init(boot_info: &'static mut BootInfo) {
     unsafe {
         let mut pics = interrupts::PICS.lock();
         pics.initialize();
-        // Unmask only IRQ0 (timer) and IRQ1 (keyboard). Every other IRQ line
-        // stays masked because we have no handler installed for it yet.
-        pics.write_masks(0b1111_1100, 0b1111_1111);
+        // Unmask only IRQ0 (timer), IRQ1 (keyboard) and IRQ4 (serial COM1).
+        // Every other IRQ line stays masked because it has no handler.
+        pics.write_masks(0b1110_1100, 0b1111_1111);
     }
     x86_64::instructions::interrupts::enable();
     info!(
         Subsystem::Interrupt,
         "INT-002",
-        "Hardware interrupts enabled (timer at {} Hz, keyboard).",
+        "Hardware interrupts enabled (timer at {} Hz, keyboard, serial).",
         time::TICK_HZ
+    );
+    info!(
+        Subsystem::Input,
+        "INPUT-001",
+        "Input ready: PS/2 keyboard and serial console."
     );
 
     info!(Subsystem::Boot, "BOOT-004", "Boot complete.");
