@@ -8,9 +8,11 @@
 use core::panic::PanicInfo;
 
 pub mod console;
+pub mod fixed;
 pub mod framebuffer;
 pub mod gdt;
 pub mod interrupts;
+pub mod ring;
 pub mod serial;
 
 pub fn init() {
