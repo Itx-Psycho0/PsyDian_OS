@@ -16,6 +16,12 @@
 //! * JSON is produced by a small hand-written encoder: the kernel only ever
 //!   *writes* a handful of fixed shapes, so a general serializer is not
 //!   needed and nothing here allocates.
+//! * Frames travelling the other way (AI Bridge -> kernel) use the same
+//!   marker on the kernel's serial input. They are cut out of the input
+//!   stream by `input::serial` and parsed and validated in [`inbound`].
+
+pub mod inbound;
+pub mod json;
 
 use crate::diagnostics::{Diagnostic, DiagnosticId};
 use crate::fixed::FixedString;
@@ -63,10 +69,26 @@ impl MessageType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestId(pub u32);
 
+impl RequestId {
+    /// Parses the `req-NNN` form used on the wire.
+    pub fn parse(text: &str) -> Option<RequestId> {
+        let digits = text.strip_prefix("req-")?;
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        digits.parse().ok().map(RequestId)
+    }
+}
+
 impl fmt::Display for RequestId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "req-{:03}", self.0)
     }
+}
+
+/// The id the next AI request will get. Lets tests prepare a matching reply.
+pub fn peek_next_request_id() -> RequestId {
+    RequestId(NEXT_REQUEST_ID.load(Ordering::Relaxed))
 }
 
 static FRAMES_SENT: AtomicU32 = AtomicU32::new(0);
@@ -313,6 +335,15 @@ fn truncated_message_is_dropped_not_sent() {
     assert!(!send(&message));
     assert_eq!(frames_sent(), sent);
     assert_eq!(frames_dropped(), dropped + 1);
+}
+
+#[test_case]
+fn request_ids_round_trip() {
+    assert_eq!(RequestId::parse("req-007"), Some(RequestId(7)));
+    assert_eq!(RequestId::parse("req-1234"), Some(RequestId(1234)));
+    for bad in ["req-", "req-1a", "resp-001", "REQ-001", "req--1", "req-+1"] {
+        assert_eq!(RequestId::parse(bad), None, "accepted {}", bad);
+    }
 }
 
 #[test_case]
