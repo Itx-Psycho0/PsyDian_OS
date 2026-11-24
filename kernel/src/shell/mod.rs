@@ -338,15 +338,101 @@ fn bad_argument_values_fail_cleanly() {
     assert_eq!(shell.execute("logs 0"), Outcome::Failed);
 }
 
+/// Delivers a frame to the kernel as the AI Bridge would: byte by byte over
+/// the serial input. `{id}` in `body` is replaced with the id the next AI
+/// request will get.
+#[cfg(test)]
+fn bridge_sends(body: &str) {
+    use core::fmt::Write;
+    let id = crate::protocol::peek_next_request_id();
+    let mut frame: crate::fixed::FixedString<1024> = crate::fixed::FixedString::new();
+    let mut parts = body.split("{id}");
+    frame.push_str("\r@PSY ");
+    frame.push_str(parts.next().unwrap_or(""));
+    for part in parts {
+        let _ = write!(frame, "{}", id);
+        frame.push_str(part);
+    }
+    frame.push('\n');
+    for byte in frame.as_str().bytes() {
+        input::serial::handle_byte(byte);
+    }
+}
+
+/// Runs `f` with short reply timeouts so failing paths do not slow the suite.
+#[cfg(test)]
+fn with_short_ai_timeouts(f: impl FnOnce()) {
+    use crate::protocol::inbound;
+    inbound::set_timeouts(300, 300);
+    f();
+    inbound::set_timeouts(inbound::DEFAULT_BRIDGE_TIMEOUT_MS, inbound::DEFAULT_NO_BRIDGE_TIMEOUT_MS);
+}
+
 #[test_case]
 fn ai_request_is_sent_and_failure_does_not_break_the_shell() {
-    let mut shell = Shell::new();
-    let frames = crate::protocol::frames_sent();
-    assert_eq!(shell.execute("ai why did the kernel panic?"), Outcome::Failed);
-    // The request left the kernel as a protocol frame ...
-    assert_eq!(crate::protocol::frames_sent(), frames + 1);
-    // ... and with no bridge answering, the shell simply carries on.
-    assert_eq!(shell.execute("help"), Outcome::Executed);
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        let frames = crate::protocol::frames_sent();
+        assert_eq!(shell.execute("ai why did the kernel panic?"), Outcome::Failed);
+        // The request left the kernel as a protocol frame ...
+        assert_eq!(crate::protocol::frames_sent(), frames + 1);
+        // ... and with no answer arriving, the shell simply carries on.
+        assert_eq!(shell.execute("help"), Outcome::Executed);
+    });
+}
+
+#[test_case]
+fn ai_answer_from_the_bridge_is_shown() {
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        let received = crate::protocol::inbound::frames_received();
+        bridge_sends(
+            r#"{"type":"ai_response","version":1,"id":"{id}","payload":{"summary":"The heap is too small for this request.","suggestions":["Run meminfo"],"commands":["meminfo"],"requiresConfirmation":false}}"#,
+        );
+        // The frame bytes never reached the shell as keystrokes.
+        assert_eq!(input::pending(), 1); // only the leading line break
+        input::clear();
+        assert_eq!(shell.execute("ai why did the heap allocation fail?"), Outcome::Executed);
+        assert_eq!(crate::protocol::inbound::frames_received(), received + 1);
+    });
+}
+
+#[test_case]
+fn ai_bridge_errors_and_invalid_answers_fail_cleanly() {
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        bridge_sends(
+            r#"{"type":"error","version":1,"id":"{id}","payload":{"code":"AI_TIMEOUT","message":"The AI service request timed out."}}"#,
+        );
+        input::clear();
+        assert_eq!(shell.execute("ai hello"), Outcome::Failed);
+
+        bridge_sends(r#"{"type":"ai_response","version":1,"id":"{id}","payload":{"summary":""}}"#);
+        input::clear();
+        assert_eq!(shell.execute("ai hello again"), Outcome::Failed);
+        // The rejected answer is logged as AI-003, then the failed command.
+        let len = crate::logger::history_len();
+        assert_eq!(crate::logger::history_get(len - 2).unwrap().code, "AI-003");
+        assert_eq!(crate::logger::history_get(len - 1).unwrap().code, "CMD-003");
+
+        assert_eq!(shell.execute("help"), Outcome::Executed);
+    });
+}
+
+#[test_case]
+fn ai_wait_can_be_cancelled() {
+    with_short_ai_timeouts(|| {
+        crate::protocol::inbound::set_timeouts(60_000, 60_000);
+        let mut shell = Shell::new();
+        input::clear();
+        type_text("\u{3}"); // Ctrl+C already waiting
+        let started = crate::time::uptime_ms();
+        assert_eq!(shell.execute("ai never answered"), Outcome::Failed);
+        assert!(crate::time::uptime_ms() - started < 5_000);
+    });
 }
 
 #[test_case]
