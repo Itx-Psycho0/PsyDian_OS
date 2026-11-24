@@ -2,10 +2,104 @@
 //!
 //! A terminal sends printable keys as plain bytes and special keys as ANSI
 //! escape sequences (`ESC [ A` for the up arrow, and so on).
+//!
+//! The same line also carries protocol frames from the AI Bridge. A line that
+//! starts with the `@PSY ` marker is cut out of the stream by [`Framer`] and
+//! handed to `protocol::inbound`; it never reaches the shell as keystrokes.
 
 use super::Key;
+use crate::protocol::{inbound, FRAME_PREFIX};
 use spin::Mutex;
 use x86_64::instructions::interrupts::without_interrupts;
+
+const PREFIX: &[u8] = FRAME_PREFIX.as_bytes();
+
+/// Separates incoming protocol frames from typed input.
+///
+/// A frame is recognised only at the start of a line, so a user typing
+/// `@PSY` in the middle of a command is never mistaken for the bridge. While
+/// the first bytes of a line could still be the marker they are held back;
+/// if the line turns out not to be a frame they are released as normal input.
+struct Framer {
+    at_line_start: bool,
+    /// Marker bytes matched so far on this line.
+    matched: usize,
+    /// Inside a frame, collecting its body.
+    collecting: bool,
+    /// The current frame exceeded the buffer or contained a byte that is not
+    /// printable ASCII; it is discarded at the end of the line.
+    broken: bool,
+    /// The last frame ended with `\r`; swallow a following `\n`.
+    swallow_line_feed: bool,
+    body: inbound::RawFrame,
+}
+
+static FRAMER: Mutex<Framer> = Mutex::new(Framer {
+    at_line_start: true,
+    matched: 0,
+    collecting: false,
+    broken: false,
+    swallow_line_feed: false,
+    body: crate::fixed::FixedString::new(),
+});
+
+/// What to do with a byte after the framer has looked at it.
+enum Feed {
+    /// Part of a frame; nothing for the shell.
+    Consumed,
+    /// Ordinary input. The held-back marker bytes (`PREFIX[..held]`) come
+    /// first, then the byte itself unless it was consumed.
+    Input { held: usize, byte: Option<u8> },
+}
+
+impl Framer {
+    fn feed(&mut self, byte: u8) -> Feed {
+        let swallow = core::mem::replace(&mut self.swallow_line_feed, false);
+
+        if self.collecting {
+            if byte == b'\n' || byte == b'\r' {
+                if self.broken {
+                    inbound::note_broken_frame();
+                } else {
+                    inbound::push_raw_frame(&self.body);
+                }
+                self.collecting = false;
+                self.broken = false;
+                self.body.clear();
+                self.at_line_start = true;
+                self.swallow_line_feed = byte == b'\r';
+            } else if !(0x20..0x7f).contains(&byte) || !self.body.push(byte as char) {
+                // The bridge escapes everything else (`\uXXXX`), so any other
+                // byte means a damaged frame.
+                self.broken = true;
+            }
+            return Feed::Consumed;
+        }
+
+        if byte == b'\n' && swallow {
+            return Feed::Consumed;
+        }
+
+        if self.matched > 0 || (self.at_line_start && byte == PREFIX[0]) {
+            if byte == PREFIX[self.matched] {
+                self.matched += 1;
+                if self.matched == PREFIX.len() {
+                    self.matched = 0;
+                    self.collecting = true;
+                    self.body.clear();
+                }
+                return Feed::Consumed;
+            }
+            // Not a frame after all: release what was held back.
+            let held = core::mem::replace(&mut self.matched, 0);
+            self.at_line_start = byte == b'\n' || byte == b'\r';
+            return Feed::Input { held, byte: Some(byte) };
+        }
+
+        self.at_line_start = byte == b'\n' || byte == b'\r';
+        Feed::Input { held: 0, byte: Some(byte) }
+    }
+}
 
 const ESCAPE: u8 = 0x1b;
 
@@ -101,12 +195,74 @@ pub fn decode_byte(byte: u8) -> Option<Key> {
     without_interrupts(|| DECODER.lock().decode(byte))
 }
 
-/// Decodes a received byte and queues the resulting key. Called from the
-/// serial interrupt handler.
+/// Handles one received byte: frame bytes go to the protocol inbox, all
+/// other bytes are decoded and queued as keys. Called from the serial
+/// interrupt handler.
 pub fn handle_byte(byte: u8) {
+    let feed = without_interrupts(|| FRAMER.lock().feed(byte));
+    if let Feed::Input { held, byte } = feed {
+        for &held_byte in &PREFIX[..held] {
+            queue_decoded(held_byte);
+        }
+        if let Some(byte) = byte {
+            queue_decoded(byte);
+        }
+    }
+}
+
+fn queue_decoded(byte: u8) {
     if let Some(key) = decode_byte(byte) {
         super::push_key(key);
     }
+}
+
+#[cfg(test)]
+fn feed_text(text: &str) {
+    for byte in text.bytes() {
+        handle_byte(byte);
+    }
+}
+
+#[test_case]
+fn frames_are_cut_out_of_the_input_stream() {
+    super::clear();
+    let received = inbound::frames_received();
+    feed_text("\r@PSY {\"type\":\"status\",\"version\":1,\"id\":\"stat-001\",\"payload\":{}}\n");
+    // Only the leading line break reached the shell.
+    assert_eq!(super::try_read_key(), Some(Key::Enter));
+    assert_eq!(super::try_read_key(), None);
+    inbound::poll();
+    assert_eq!(inbound::frames_received(), received + 1);
+    assert!(inbound::bridge_seen());
+}
+
+#[test_case]
+fn marker_lookalikes_are_released_as_input() {
+    super::clear();
+    feed_text("\r@PS!");
+    assert_eq!(super::try_read_key(), Some(Key::Enter));
+    for c in ['@', 'P', 'S', '!'] {
+        assert_eq!(super::try_read_key(), Some(Key::Char(c)));
+    }
+    // A marker in the middle of a line is ordinary text.
+    feed_text("x@PSY y");
+    let typed: [Option<Key>; 7] = core::array::from_fn(|_| super::try_read_key());
+    assert_eq!(typed[1], Some(Key::Char('@')));
+    assert_eq!(typed[6], Some(Key::Char('y')));
+    feed_text("\r");
+    super::clear();
+}
+
+#[test_case]
+fn broken_frames_are_discarded() {
+    super::clear();
+    let rejected = inbound::frames_rejected();
+    // A raw control byte inside a frame ...
+    feed_text("\r@PSY {\"a\":\u{1}}\r\n");
+    assert_eq!(inbound::frames_rejected(), rejected + 1);
+    // ... and the `\n` of the `\r\n` pair is not turned into an Enter.
+    assert_eq!(super::try_read_key(), Some(Key::Enter)); // the leading `\r`
+    assert_eq!(super::try_read_key(), None);
 }
 
 #[test_case]
