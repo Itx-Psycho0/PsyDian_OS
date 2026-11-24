@@ -10,7 +10,8 @@
 use super::Shell;
 use super::parser::ParsedCommand;
 use crate::diagnostics::{self, Diagnostic, DiagnosticId};
-use crate::logger::{self, Level};
+use crate::logger::{self, Level, Subsystem};
+use crate::protocol::inbound::{self, AiResponse, Printable, Reply, WaitError};
 use crate::{print, println};
 use core::fmt;
 
@@ -444,13 +445,79 @@ fn ai(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
     let request = crate::protocol::send_ai_request(command.rest, related).ok_or(
         CommandError::Unavailable("Diagnostic communication failed: request is too long."),
     )?;
-    println!("[AI] Request {} sent to the AI Bridge.", request);
+    println!("[AI] Request {} sent to the AI Bridge. Waiting for the answer (Ctrl+C cancels)...", request);
 
-    // Receiving `ai_response` frames is part of the AI Bridge milestone. Until
-    // then the command reports the missing answer and the shell carries on.
-    Err(CommandError::Unavailable(
-        "AI assistance unavailable: no response from the AI Bridge.",
-    ))
+    // The answer comes back as an `ai_response` frame on the serial line.
+    // Whatever arrives is only displayed: suggested commands are shown, never
+    // run, and any failure leaves the shell working (fail closed).
+    match inbound::wait_for_reply(request) {
+        Ok(Reply::Answer(response)) => {
+            print_ai_response(&response);
+            Ok(())
+        }
+        Ok(Reply::BridgeError(error)) => {
+            logger::record(
+                Level::Warn,
+                Subsystem::Ai,
+                "AI-001",
+                format_args!("AI Bridge error for {}: {}", request, error.code),
+            );
+            if error.message.as_str().is_empty() {
+                println!("[AI] The AI Bridge reported {}.", Printable(error.code.as_str()));
+            } else {
+                println!(
+                    "[AI] The AI Bridge reported {}: {}",
+                    Printable(error.code.as_str()),
+                    Printable(error.message.as_str())
+                );
+            }
+            Err(CommandError::Unavailable("AI assistance unavailable for this request."))
+        }
+        Err(WaitError::Invalid(reason)) => {
+            logger::record(
+                Level::Warn,
+                Subsystem::Ai,
+                "AI-003",
+                format_args!("Invalid AI response for {}: {}", request, reason),
+            );
+            println!("[AI] Answer rejected: {}.", reason);
+            Err(CommandError::Unavailable(
+                "AI assistance unavailable: the AI Bridge sent an invalid response.",
+            ))
+        }
+        Err(WaitError::Cancelled) => Err(CommandError::Unavailable("AI request cancelled.")),
+        Err(WaitError::Timeout { bridge_seen: false }) => Err(CommandError::Unavailable(
+            "AI assistance unavailable: no response from the AI Bridge.",
+        )),
+        Err(WaitError::Timeout { bridge_seen: true }) => {
+            logger::record(
+                Level::Warn,
+                Subsystem::Ai,
+                "AI-002",
+                format_args!("No answer for {} before the timeout", request),
+            );
+            Err(CommandError::Unavailable(
+                "AI assistance unavailable: the AI Bridge did not answer in time.",
+            ))
+        }
+    }
+}
+
+fn print_ai_response(response: &AiResponse) {
+    println!("[AI] Answer to {}:", response.request);
+    println!("  {}", Printable(response.summary.as_str()));
+    if response.suggestions().next().is_some() {
+        println!("  Suggestions:");
+        for (index, suggestion) in response.suggestions().enumerate() {
+            println!("    {}. {}", index + 1, Printable(suggestion));
+        }
+    }
+    if response.commands().next().is_some() {
+        println!("  Suggested commands (not run automatically):");
+        for command in response.commands() {
+            println!("    > {}", Printable(command));
+        }
+    }
 }
 
 fn panic_test(_shell: &mut Shell, _command: &ParsedCommand) -> CommandResult {

@@ -17,7 +17,7 @@ User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bri
 | 3 | Exceptions, interrupts, paging, heap | Done |
 | 4 | Keyboard and serial input, shell | Done |
 | 5 | Logger levels, diagnostics, panic handling, message protocol | Done |
-| 6 | Host-side AI Bridge | Not started |
+| 6 | Host-side AI Bridge | In progress (kernel side done: receiving and validating `ai_response` frames) |
 | 7 | External AI integration and safety validation | Not started |
 | 8 | Integration, testing, demo | Not started |
 
@@ -66,7 +66,7 @@ Runs every kernel unit and integration test inside QEMU.
 | `history` | Previously entered commands |
 | `logs [count] [level]` | Recent kernel log records |
 | `diag [list \| last \| <n> \| send <n>]` | Show or re-send diagnostic records |
-| `ai <question...>` | Send a question to the AI Bridge (no bridge yet, so it reports "unavailable") |
+| `ai <question...>` | Send a question to the AI Bridge and show its answer (waits 3 s without a bridge, 30 s with one; Ctrl+C cancels) |
 | `panic-test` | Trigger a controlled kernel panic (asks for confirmation) |
 | `fault-test <scenario>` | Inject a fault: `breakpoint`, `heap`, `page-fault`, `divide-by-zero`, `invalid-opcode`, `stack-overflow` (asks for confirmation) |
 | `shutdown` | Stop the system (exits QEMU) |
@@ -106,7 +106,7 @@ kernel/
     input/          key queue, PS/2 keyboard and serial decoders
     shell/          line editor, parser, commands, history, completion
     diagnostics/    structured diagnostic records
-    protocol/       serial frames for the AI Bridge
+    protocol/       serial frames to and from the AI Bridge (JSON reader, reply validation)
     panic/          panic and fatal-exception capture
   tests/            integration tests (each boots its own kernel in QEMU)
 Docs/               project documentation (requirements, design, roadmap)
