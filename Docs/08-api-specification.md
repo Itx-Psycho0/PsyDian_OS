@@ -300,7 +300,56 @@ Status (sent once when the shell is ready for input):
 {"type":"status","version":1,"id":"stat-001","payload":{"state":"ready","kernel":"0.1.0","uptime_ms":20}}
 ```
 
-**Messages the kernel receives.** Serial input is already interrupt-driven and feeds the shell, but the kernel does not parse `ai_response` / `error` frames yet. That is part of the AI Bridge milestone; until then `ai` reports that no response arrived and the shell continues normally.
+**Messages the kernel receives (implemented, `kernel/src/protocol/inbound.rs`).** The bridge writes frames to the kernel's serial input with the same marker:
+
+```text
+@PSY <JSON envelope>\n
+```
+
+- A frame is recognised only when the marker starts a line, so text a user types is never mistaken for a frame. The bridge should therefore send a line break before the marker when it is unsure where the line stands.
+- A frame ends at `\n` or `\r` (a following `\n` is ignored). Frame bytes never reach the shell as keystrokes.
+- Frames sent to the kernel must be printable ASCII (`0x20`-`0x7e`) and at most 2048 bytes; use JSON `\uXXXX` escapes for anything else. A frame with other bytes, or a longer one, is discarded.
+- The interrupt handler only stores the raw line (up to 2 waiting frames). Parsing and validation run later, when `ai` waits for its answer.
+
+AI response. The envelope `id` is the id of the request being answered (`req-NNN`):
+
+```json
+{"type":"ai_response","version":1,"id":"req-001","payload":{"summary":"The heap allocator could not find a free block of the requested size.","suggestions":["Run meminfo to see heap usage"],"commands":["meminfo"],"requiresConfirmation":false}}
+```
+
+| Payload field | Rule |
+|---|---|
+| `summary` | Required, non-empty string, at most 480 characters |
+| `suggestions` | Optional array of at most 4 strings, each at most 160 characters |
+| `commands` | Optional array of at most 3 strings, each at most 80 characters. Shown as suggestions only; the kernel never runs them by itself |
+| `requiresConfirmation` | Optional boolean, default `false` |
+
+Unknown payload fields (for example `limitations`) are ignored. Values that are too long are rejected, never truncated.
+
+Bridge error. `id` may be the request id; otherwise the payload may name it in `request_id`. An error without a request id is applied to the request currently waiting:
+
+```json
+{"type":"error","version":1,"id":"err-001","payload":{"code":"AI_TIMEOUT","message":"The AI service request timed out.","request_id":"req-001"}}
+```
+
+`code` is required (at most 32 characters, see section 9); `message` is optional (at most 200 characters).
+
+Bridge status. A `status` frame such as `{"type":"status","version":1,"id":"stat-001","payload":{"state":"bridge_ready"}}` tells the kernel a bridge is attached. The bridge should send one when it connects.
+
+**Validation and failure handling.** A frame is accepted only if it is valid JSON (nesting depth at most 8), `version` is `1`, `type` is `ai_response`, `error` or `status`, and every field follows the rules above. A rejected frame is counted and logged as `COMM-002`. If it named a request id, the waiting `ai` command fails immediately with "invalid response" (`AI-003`) instead of waiting for the timeout.
+
+`ai` waits 30 seconds for the answer once any bridge has been heard from since boot, or 3 seconds if none has, so the shell never hangs without a bridge. Ctrl+C cancels the wait. Replies to older, abandoned requests are discarded. Text from the bridge is printed with control characters replaced by spaces and non-ASCII characters replaced by `?`, so a reply cannot move the cursor or send terminal escape sequences.
+
+| Outcome | Shell result | Log code |
+|---|---|---|
+| Valid `ai_response` | Summary, suggestions and suggested commands are printed | - |
+| `error` frame | The bridge's code and message are printed; command fails | `AI-001` |
+| Invalid reply for this request | "invalid response"; command fails | `AI-003` |
+| No reply, bridge seen before | "did not answer in time"; command fails | `AI-002` |
+| No reply, no bridge ever seen | "no response from the AI Bridge"; command fails | - |
+| Ctrl+C | "AI request cancelled."; command fails | - |
+
+In every case the shell keeps running.
 
 ---
 
