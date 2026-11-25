@@ -50,6 +50,8 @@ pub struct Shell {
     /// The line being edited.
     line: Line,
     history: History,
+    /// Commands from the latest AI answer, for `run <n>`.
+    suggested: commands::Suggested,
 }
 
 impl Shell {
@@ -57,6 +59,7 @@ impl Shell {
         Self {
             line: FixedString::new(),
             history: History::new(),
+            suggested: commands::Suggested::new(),
         }
     }
 
@@ -194,9 +197,9 @@ impl Shell {
 
     /// Parses, validates and runs one command line.
     ///
-    /// Every command, whoever suggests it (the user today, the AI assistant
-    /// later), goes through this single path, so validation and confirmation
-    /// cannot be bypassed.
+    /// Every command, whoever suggests it (typed by the user or picked from
+    /// an AI answer with `run`), goes through this single path, so validation
+    /// and confirmation cannot be bypassed.
     pub fn execute(&mut self, line: &str) -> Outcome {
         let command = match parser::parse(line) {
             Ok(Some(command)) => command,
@@ -260,6 +263,16 @@ impl Shell {
                     format_args!("Command executed: {}", entry.name),
                 );
                 Outcome::Executed
+            }
+            Err(commands::CommandError::Cancelled) => {
+                println!("Cancelled.");
+                logger::record(
+                    Level::Info,
+                    Subsystem::Shell,
+                    "CMD-004",
+                    format_args!("Command '{}' cancelled at confirmation", entry.name),
+                );
+                Outcome::Cancelled
             }
             Err(err) => {
                 println!("[ERROR] {}", err);
@@ -432,6 +445,110 @@ fn ai_wait_can_be_cancelled() {
         let started = crate::time::uptime_ms();
         assert_eq!(shell.execute("ai never answered"), Outcome::Failed);
         assert!(crate::time::uptime_ms() - started < 5_000);
+    });
+}
+
+/// Asks the shell a question and has the bridge answer it with `commands`.
+#[cfg(test)]
+fn answer_with_commands(shell: &mut Shell, commands: &str, requires_confirmation: bool) {
+    let mut body: crate::fixed::FixedString<512> = crate::fixed::FixedString::new();
+    body.push_str(r#"{"type":"ai_response","version":1,"id":"{id}","payload":{"summary":"Try these.","commands":["#);
+    body.push_str(commands);
+    body.push_str(r#"],"requiresConfirmation":"#);
+    body.push_str(if requires_confirmation { "true" } else { "false" });
+    body.push_str("}}");
+    bridge_sends(body.as_str());
+    input::clear();
+    assert_eq!(shell.execute("ai what should I check?"), Outcome::Executed);
+}
+
+#[cfg(test)]
+fn last_log_code() -> &'static str {
+    let len = crate::logger::history_len();
+    crate::logger::history_get(len - 1).unwrap().code
+}
+
+#[test_case]
+fn suggested_commands_run_only_through_run() {
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        assert_eq!(shell.execute("run"), Outcome::Executed); // lists nothing
+        assert_eq!(shell.execute("run 1"), Outcome::Failed); // nothing to run yet
+
+        let executed = crate::logger::count(Level::Info);
+        answer_with_commands(&mut shell, r#""meminfo","diag last""#, false);
+        // Receiving the answer ran nothing: only the `ai` command itself.
+        assert_eq!(crate::logger::count(Level::Info), executed + 1);
+        assert_eq!(shell.suggested.len(), 2);
+
+        assert_eq!(shell.execute("run"), Outcome::Executed);
+        // A safe suggestion runs straight away, through the normal path.
+        assert_eq!(shell.execute("run 1"), Outcome::Executed);
+        let len = crate::logger::history_len();
+        assert_eq!(crate::logger::history_get(len - 3).unwrap().code, "AI-010");
+        assert_eq!(crate::logger::history_get(len - 2).unwrap().code, "CMD-010"); // meminfo
+        assert_eq!(crate::logger::history_get(len - 1).unwrap().code, "CMD-010"); // run
+
+        assert_eq!(shell.execute("run 0"), Outcome::Failed);
+        assert_eq!(shell.execute("run 3"), Outcome::Failed);
+        assert_eq!(shell.execute("run one"), Outcome::Failed);
+        assert_eq!(shell.execute("run 1 2"), Outcome::InvalidArguments);
+
+        // A new question throws the old suggestions away, even if it fails.
+        assert_eq!(shell.execute("ai unanswered"), Outcome::Failed);
+        assert!(shell.suggested.is_empty());
+        assert_eq!(shell.execute("run 1"), Outcome::Failed);
+    });
+}
+
+#[test_case]
+fn dangerous_suggestions_are_blocked_or_confirmed() {
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        answer_with_commands(&mut shell, r#""panic-test","shutdown","rm -rf /""#, false);
+
+        // Destructive: never runs, not even with a "y" waiting.
+        let panics = crate::logger::count(Level::Panic);
+        type_text("y\n");
+        assert_eq!(shell.execute("run 1"), Outcome::Failed);
+        input::clear();
+        let len = crate::logger::history_len();
+        assert_eq!(crate::logger::history_get(len - 2).unwrap().code, "AI-011");
+        assert_eq!(crate::logger::count(Level::Panic), panics);
+
+        // Privileged: asks first; anything but "y" keeps the system running.
+        type_text("\n");
+        assert_eq!(shell.execute("run 2"), Outcome::Cancelled);
+        type_text("no\n");
+        assert_eq!(shell.execute("run 2"), Outcome::Cancelled);
+        let len = crate::logger::history_len();
+        assert_eq!(crate::logger::history_get(len - 2).unwrap().code, "AI-012");
+        assert_eq!(last_log_code(), "CMD-004");
+
+        // Not a Psydian command at all.
+        assert_eq!(shell.execute("run 3"), Outcome::Failed);
+    });
+}
+
+#[test_case]
+fn confirmation_requested_by_the_answer_is_honoured() {
+    with_short_ai_timeouts(|| {
+        let mut shell = Shell::new();
+        input::clear();
+        answer_with_commands(&mut shell, r#""uptime""#, true);
+        // Even a safe command waits for a yes when the answer asks for it.
+        type_text("n\n");
+        assert_eq!(shell.execute("run 1"), Outcome::Cancelled);
+        type_text("y\n");
+        assert_eq!(shell.execute("run 1"), Outcome::Executed);
+
+        // A sensitive suggestion (it would send data out) also asks.
+        answer_with_commands(&mut shell, r#""ai tell me more""#, false);
+        type_text("n\n");
+        assert_eq!(shell.execute("run 1"), Outcome::Cancelled);
+        assert_eq!(shell.suggested.len(), 1);
     });
 }
 
