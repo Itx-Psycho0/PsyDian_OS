@@ -85,8 +85,10 @@ fn create_image(elf: &Path) -> Result<PathBuf, ExitCode> {
 
 fn qemu(image: &Path) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
+    // snapshot=on: the kernel never writes to its disk, and a read-only boot
+    // lets several QEMU instances (a demo and the tests, say) share the image.
     cmd.arg("-drive")
-        .arg(format!("format=raw,file={}", image.display()))
+        .arg(format!("format=raw,snapshot=on,file={}", image.display()))
         .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"])
         .args(["-serial", "stdio"]);
     cmd
