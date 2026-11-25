@@ -8,6 +8,30 @@ Psydian is a small bare-metal kernel that boots in QEMU, gives you an interactiv
 User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bridge -> AI service
 ```
 
+## Quick start (one command)
+
+On Linux, macOS or Windows (inside WSL), open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Itx-Psycho0/PsyDian_OS/main/scripts/install.sh | bash
+```
+
+This installs everything Psydian needs (QEMU, Rust, git, Python), downloads and builds Psydian into `~/PsyDian_OS`, adds a `psydian` command and runs a short self-test. The first run takes a few minutes. Running it again updates an existing install.
+
+Then:
+
+| Command | What it does |
+|---|---|
+| `psydian` | Boot Psydian (QEMU window if there is a display, otherwise in the terminal) |
+| `psydian demo` | Boot with a mock AI Bridge: try `ai hello`, then `run 1` |
+| `psydian check` | End-to-end smoke test (about 30 seconds) |
+| `psydian test` | Full kernel test suite |
+| `psydian update` | Download the latest version and rebuild |
+
+Inside Psydian, type `help` to list the shell commands and `shutdown` to quit.
+
+**Windows:** run `wsl --install` in PowerShell (as administrator), restart, open "Ubuntu" from the Start menu and run the command there.
+
 ## Current status
 
 | Week | Scope | Status |
@@ -21,9 +45,11 @@ User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bri
 | 7 | External AI integration and safety validation | In progress (kernel side done: risk levels and `run` for AI-suggested commands) |
 | 8 | Integration, testing, demo | Not started |
 
-## Prerequisites
+## Manual setup
 
-- Linux (other hosts may work but are untested)
+The installer does all of this for you. To set up by hand you need:
+
+- Linux or macOS (on Windows, use WSL), plus git, Python 3 and a C linker (`cc`)
 - [rustup](https://rustup.rs/). The nightly toolchain, `rust-src`, `llvm-tools-preview` and the `x86_64-unknown-none` target are installed automatically from `rust-toolchain.toml`.
 - QEMU: `qemu-system-x86_64` must be on your `PATH`.
 
@@ -116,7 +142,8 @@ The first line is the human-readable log record. The line starting with `@PSY ` 
 Cargo.toml          workspace + host-side launcher package
 build.rs            builds the bootable disk image from the kernel
 src/main.rs         launcher: runs QEMU for `cargo run` and for kernel tests
-scripts/            mock AI Bridge and smoke test, QEMU helper
+scripts/            installer, `psydian` command, mock AI Bridge and smoke test
+.github/workflows/  CI: runs the installer, smoke test and kernel tests
 kernel/
   src/
     main.rs         kernel entry point

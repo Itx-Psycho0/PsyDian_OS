@@ -173,6 +173,34 @@ QEMU
 Demo
 ```
 
+## 6.1 Tester Installation (Implemented)
+
+Anyone who wants to try or evaluate Psydian installs it with one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Itx-Psycho0/PsyDian_OS/main/scripts/install.sh | bash
+```
+
+`scripts/install.sh` performs these steps and skips any that are already done:
+
+```text
+System packages (QEMU, git, curl, Python 3, C linker)   apt / dnf / pacman / zypper / Homebrew
+    ↓
+rustup (into ~/.cargo; toolchain pinned by rust-toolchain.toml)
+    ↓
+git clone into ~/PsyDian_OS (or fast-forward update)
+    ↓
+cargo build (kernel + BIOS disk image)
+    ↓
+~/.local/bin/psydian -> scripts/psydian
+    ↓
+psydian check (end-to-end smoke test with the mock AI Bridge)
+```
+
+Supported hosts: Linux (Debian/Ubuntu, Fedora, Arch, openSUSE), macOS with Homebrew, and Windows through WSL. The script changes nothing outside the user's home directory apart from system packages. It is re-runnable, and the `PSYDIAN_DIR`, `PSYDIAN_REPO`, `PSYDIAN_BRANCH`, `PSYDIAN_SKIP_PACKAGES` and `PSYDIAN_SKIP_CHECK` variables adjust it.
+
+The `psydian` command then boots the system (`psydian`, `psydian headless`), starts the mock AI Bridge demo (`psydian demo`), runs the smoke test (`psydian check`) or the kernel tests (`psydian test`), and updates the install (`psydian update`).
+
 ---
 
 # 7. Kernel Deployment
@@ -671,6 +699,8 @@ Stable Build / Demo
 ```
 
 Only validated builds should be used for final demonstrations.
+
+The implemented pipeline is `.github/workflows/ci.yml`. It runs on every push to `main` and on every pull request: shellcheck on the scripts, the one-command installer on a clean Ubuntu runner (which builds the image and runs the smoke test), and the full kernel test suite in QEMU.
 
 ---
 
