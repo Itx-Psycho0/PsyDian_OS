@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Install, build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the shell scripts
+        run: shellcheck scripts/install.sh scripts/psydian scripts/run-qemu.sh
+
+      # The same one-command installer testers use: installs QEMU, Rust,
+      # builds the kernel, installs `psydian` and runs the smoke test.
+      - name: One-command install (includes the smoke test)
+        env:
+          PSYDIAN_DIR: ${{ github.workspace }}
+          PSYDIAN_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: bash scripts/install.sh
+
+      - name: psydian command works
+        run: |
+          ~/.local/bin/psydian where
+          ~/.local/bin/psydian help
+
+      - name: Kernel unit and integration tests (in QEMU)
+        run: ~/.local/bin/psydian test
