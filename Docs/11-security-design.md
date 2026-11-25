@@ -200,7 +200,18 @@ DESTRUCTIVE
  └── Require explicit confirmation and strict validation
 ```
 
-The exact command classification will be finalized during shell implementation.
+### Implemented Classification
+
+Each shell command carries a fixed risk level in the command registry (`kernel/src/shell/commands.rs`):
+
+| Level | Commands | Typed by the user | Suggested by the AI (`run <n>`) |
+|---|---|---|---|
+| SAFE | `help`, `clear`, `info`, `meminfo`, `uptime`, `echo`, `history`, `logs`, `diag`, `run` | Runs | Runs |
+| SENSITIVE | `ai` | Runs | Explicit confirmation |
+| PRIVILEGED | `shutdown` | Runs | Explicit confirmation |
+| DESTRUCTIVE | `panic-test`, `fault-test` | Explicit confirmation | Blocked |
+
+Before the risk check, an AI suggestion passes the same parser, registry lookup and argument validation as a typed command. A suggestion may never be `run` itself. If the AI answer sets `requiresConfirmation`, even SAFE suggestions ask first. The details are in Docs/08-api-specification.md, section 15.1.
 
 ---
 
@@ -733,7 +744,7 @@ Clearly destructive/unsafe action
 → Reject or require strict authorization
 ```
 
-The exact risk policy should be documented as the shell command set grows.
+The risk policy implemented for the current command set is in section 5.2. Every new command must be given a risk level when it is added to the registry.
 
 ---
 

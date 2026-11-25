@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# The `psydian` command, installed into ~/.local/bin by scripts/install.sh.
+# It can also be run straight from a checkout: scripts/psydian <command>
+set -euo pipefail
+
+# Find the checkout this script belongs to, following the ~/.local/bin link.
+source_path="${BASH_SOURCE[0]}"
+while [ -L "$source_path" ]; do
+  target="$(readlink "$source_path")"
+  case "$target" in
+    /*) source_path="$target" ;;
+    *)  source_path="$(dirname "$source_path")/$target" ;;
+  esac
+done
+REPO="$(cd "$(dirname "$source_path")/.." && pwd)"
+cd "$REPO"
+
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+
+has_display() {
+  [ "$(uname -s)" = Darwin ] || [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+}
+
+usage() {
+  cat <<'EOF'
+usage: psydian [command]
+
+  (none) / run   boot Psydian: QEMU window plus this terminal as the serial
+                 console; without a display, only the terminal
+  headless       boot with the serial console only (no window)
+  demo           boot headless with a mock AI Bridge, so `ai` gets answers
+  check          end-to-end smoke test with the mock AI Bridge (~30 s)
+  test           full kernel test suite inside QEMU (cargo ktest)
+  debug          boot and log CPU exceptions and resets to qemu.log
+  update         download the latest version and rebuild
+  where          print where the source code is
+  help           this text
+
+Inside Psydian type 'help' for the shell commands and 'shutdown' to quit.
+EOF
+}
+
+case "${1:-run}" in
+  run)
+    if has_display; then exec cargo run --quiet; else exec cargo run --quiet -- --headless; fi ;;
+  headless) exec cargo run --quiet -- --headless ;;
+  demo)     exec python3 scripts/mock-bridge.py ;;
+  check)    exec python3 scripts/mock-bridge.py --check ;;
+  test)     exec cargo ktest ;;
+  debug)    exec cargo run --quiet -- --debug ;;
+  update)
+    git pull --ff-only
+    cargo build --quiet
+    echo "Psydian is up to date ($(git log -1 --format='%h %s'))." ;;
+  where)    echo "$REPO" ;;
+  help|-h|--help) usage ;;
+  *) echo "psydian: unknown command '$1'" >&2; usage >&2; exit 2 ;;
+esac

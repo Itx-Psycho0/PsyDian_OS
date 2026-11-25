@@ -8,6 +8,30 @@ Psydian is a small bare-metal kernel that boots in QEMU, gives you an interactiv
 User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bridge -> AI service
 ```
 
+## Quick start (one command)
+
+On Linux, macOS or Windows (inside WSL), open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Itx-Psycho0/PsyDian_OS/main/scripts/install.sh | bash
+```
+
+This installs everything Psydian needs (QEMU, Rust, git, Python), downloads and builds Psydian into `~/PsyDian_OS`, adds a `psydian` command and runs a short self-test. The first run takes a few minutes. Running it again updates an existing install.
+
+Then:
+
+| Command | What it does |
+|---|---|
+| `psydian` | Boot Psydian (QEMU window if there is a display, otherwise in the terminal) |
+| `psydian demo` | Boot with a mock AI Bridge: try `ai hello`, then `run 1` |
+| `psydian check` | End-to-end smoke test (about 30 seconds) |
+| `psydian test` | Full kernel test suite |
+| `psydian update` | Download the latest version and rebuild |
+
+Inside Psydian, type `help` to list the shell commands and `shutdown` to quit.
+
+**Windows:** run `wsl --install` in PowerShell (as administrator), restart, open "Ubuntu" from the Start menu and run the command there.
+
 ## Current status
 
 | Week | Scope | Status |
@@ -18,12 +42,14 @@ User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bri
 | 4 | Keyboard and serial input, shell | Done |
 | 5 | Logger levels, diagnostics, panic handling, message protocol | Done |
 | 6 | Host-side AI Bridge | In progress (kernel side done: receiving and validating `ai_response` frames) |
-| 7 | External AI integration and safety validation | Not started |
+| 7 | External AI integration and safety validation | In progress (kernel side done: risk levels and `run` for AI-suggested commands) |
 | 8 | Integration, testing, demo | Not started |
 
-## Prerequisites
+## Manual setup
 
-- Linux (other hosts may work but are untested)
+The installer does all of this for you. To set up by hand you need:
+
+- Linux or macOS (on Windows, use WSL), plus git, Python 3 and a C linker (`cc`)
 - [rustup](https://rustup.rs/). The nightly toolchain, `rust-src`, `llvm-tools-preview` and the `x86_64-unknown-none` target are installed automatically from `rust-toolchain.toml`.
 - QEMU: `qemu-system-x86_64` must be on your `PATH`.
 
@@ -53,6 +79,18 @@ cargo ktest
 
 Runs every kernel unit and integration test inside QEMU.
 
+```bash
+python3 scripts/mock-bridge.py
+```
+
+Boots Psydian headless with a mock AI Bridge attached, so `ai` questions get canned answers and you can try `run`. No AI service or API key is needed. The real AI Bridge is developed separately.
+
+```bash
+python3 scripts/mock-bridge.py --check
+```
+
+End-to-end smoke test: boots the kernel, drives the shell through the mock bridge (answers, AI command safety, bridge errors, invalid answers, cancel) and checks every step.
+
 ## Shell commands
 
 | Command | What it does |
@@ -67,11 +105,25 @@ Runs every kernel unit and integration test inside QEMU.
 | `logs [count] [level]` | Recent kernel log records |
 | `diag [list \| last \| <n> \| send <n>]` | Show or re-send diagnostic records |
 | `ai <question...>` | Send a question to the AI Bridge and show its answer (waits 3 s without a bridge, 30 s with one; Ctrl+C cancels) |
+| `run [number]` | Run a command the AI suggested in its last answer, after the safety checks; without a number, list them |
 | `panic-test` | Trigger a controlled kernel panic (asks for confirmation) |
 | `fault-test <scenario>` | Inject a fault: `breakpoint`, `heap`, `page-fault`, `divide-by-zero`, `invalid-opcode`, `stack-overflow` (asks for confirmation) |
 | `shutdown` | Stop the system (exits QEMU) |
 
 Tab completes command names, Up/Down browse the history, Ctrl+C abandons the current line and Ctrl+L clears the screen.
+
+### AI-suggested commands
+
+The AI never runs anything. Its suggested commands are listed with a number and a risk level, and run only when you type `run <number>`:
+
+| Risk | Commands | When suggested by the AI |
+|---|---|---|
+| safe | `help`, `info`, `meminfo`, `uptime`, `logs`, `diag`, ... | runs |
+| sensitive | `ai` | asks y/N first |
+| privileged | `shutdown` | asks y/N first |
+| destructive | `panic-test`, `fault-test` | blocked |
+
+`help <command>` shows a command's risk level. The full policy is in [Docs/11-security-design.md](Docs/11-security-design.md) (section 5.2).
 
 ## What a diagnostic looks like
 
@@ -90,6 +142,8 @@ The first line is the human-readable log record. The line starting with `@PSY ` 
 Cargo.toml          workspace + host-side launcher package
 build.rs            builds the bootable disk image from the kernel
 src/main.rs         launcher: runs QEMU for `cargo run` and for kernel tests
+scripts/            installer, `psydian` command, mock AI Bridge and smoke test
+.github/workflows/  CI: runs the installer, smoke test and kernel tests
 kernel/
   src/
     main.rs         kernel entry point

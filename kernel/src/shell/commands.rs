@@ -6,12 +6,19 @@
 //! demands it, and only then calls the handler. Adding a command means adding
 //! one entry and one handler function; the parser and the shell loop do not
 //! change.
+//!
+//! Every entry also carries a [`Risk`] level. It decides what happens when the
+//! AI assistant suggests the command (see [`run`]): the assistant never runs
+//! anything itself, and the riskier a suggestion, the more the user has to do
+//! before it runs.
 
 use super::Shell;
 use super::parser::ParsedCommand;
 use crate::diagnostics::{self, Diagnostic, DiagnosticId};
 use crate::logger::{self, Level, Subsystem};
-use crate::protocol::inbound::{self, AiResponse, Printable, Reply, WaitError};
+use crate::fixed::FixedString;
+use crate::protocol::RequestId;
+use crate::protocol::inbound::{self, AiResponse, Printable, Reply, WaitError, MAX_COMMANDS, MAX_COMMAND_LENGTH};
 use crate::{print, println};
 use core::fmt;
 
@@ -22,6 +29,8 @@ pub enum CommandError {
     InvalidArguments(&'static str),
     /// The command needs something that is not available right now.
     Unavailable(&'static str),
+    /// The user said no at a confirmation prompt inside the command.
+    Cancelled,
 }
 
 impl fmt::Display for CommandError {
@@ -31,11 +40,60 @@ impl fmt::Display for CommandError {
                 write!(f, "Invalid command arguments: {}", reason)
             }
             CommandError::Unavailable(reason) => f.write_str(reason),
+            CommandError::Cancelled => f.write_str("Cancelled."),
         }
     }
 }
 
 pub type CommandResult = Result<(), CommandError>;
+
+/// How much harm a command can do. This is the risk classification from
+/// Docs/11-security-design.md (section 5.2).
+///
+/// | Level         | Typed by the user           | Suggested by the AI (`run <n>`) |
+/// |---------------|-----------------------------|---------------------------------|
+/// | `Safe`        | runs                        | runs                            |
+/// | `Sensitive`   | runs                        | runs after a y/N confirmation   |
+/// | `Privileged`  | runs                        | runs after a y/N confirmation   |
+/// | `Destructive` | runs after its confirmation | never runs: blocked             |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Risk {
+    /// Only reads and prints kernel state.
+    Safe,
+    /// Sends information out of the kernel (to the host / AI Bridge).
+    Sensitive,
+    /// Changes the state of the whole system, e.g. stops it.
+    Privileged,
+    /// Deliberately crashes or damages the running kernel.
+    Destructive,
+}
+
+impl Risk {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Risk::Safe => "safe",
+            Risk::Sensitive => "sensitive",
+            Risk::Privileged => "privileged",
+            Risk::Destructive => "destructive",
+        }
+    }
+
+    /// Why the level was given, shown next to a suggested command.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Risk::Safe => "only shows information",
+            Risk::Sensitive => "sends data to the host",
+            Risk::Privileged => "changes the state of the system",
+            Risk::Destructive => "crashes or damages the kernel",
+        }
+    }
+}
+
+impl fmt::Display for Risk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 pub struct Command {
     pub name: &'static str,
@@ -49,6 +107,7 @@ pub struct Command {
     /// shell shows the warning and runs the command only after an explicit
     /// "y" from the user.
     pub confirmation: Option<&'static str>,
+    pub risk: Risk,
     pub handler: fn(&mut Shell, &ParsedCommand) -> CommandResult,
 }
 
@@ -61,6 +120,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 1,
         confirmation: None,
+        risk: Risk::Safe,
         handler: help,
     },
     Command {
@@ -70,6 +130,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Safe,
         handler: clear,
     },
     Command {
@@ -79,6 +140,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Safe,
         handler: info,
     },
     Command {
@@ -88,6 +150,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Safe,
         handler: meminfo,
     },
     Command {
@@ -97,6 +160,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Safe,
         handler: uptime,
     },
     Command {
@@ -106,6 +170,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: usize::MAX,
         confirmation: None,
+        risk: Risk::Safe,
         handler: echo,
     },
     Command {
@@ -115,6 +180,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Safe,
         handler: history,
     },
     Command {
@@ -124,6 +190,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 2,
         confirmation: None,
+        risk: Risk::Safe,
         handler: logs,
     },
     Command {
@@ -133,6 +200,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 2,
         confirmation: None,
+        risk: Risk::Safe,
         handler: diag,
     },
     Command {
@@ -142,7 +210,18 @@ pub static COMMANDS: &[Command] = &[
         min_args: 1,
         max_args: usize::MAX,
         confirmation: None,
+        risk: Risk::Sensitive,
         handler: ai,
+    },
+    Command {
+        name: "run",
+        usage: "run [number]",
+        summary: "Run a command the AI assistant suggested (after safety checks)",
+        min_args: 0,
+        max_args: 1,
+        confirmation: None,
+        risk: Risk::Safe,
+        handler: run,
     },
     Command {
         name: "panic-test",
@@ -151,6 +230,7 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: Some("This deliberately crashes the kernel. A restart is required afterwards."),
+        risk: Risk::Destructive,
         handler: panic_test,
     },
     Command {
@@ -162,6 +242,7 @@ pub static COMMANDS: &[Command] = &[
         confirmation: Some(
             "This injects a real fault. Every scenario except 'breakpoint' and 'heap' halts the kernel.",
         ),
+        risk: Risk::Destructive,
         handler: fault_test,
     },
     Command {
@@ -171,9 +252,114 @@ pub static COMMANDS: &[Command] = &[
         min_args: 0,
         max_args: 0,
         confirmation: None,
+        risk: Risk::Privileged,
         handler: shutdown,
     },
 ];
+
+/// The commands suggested in the most recent AI answer, kept by the shell so
+/// `run <n>` can pick one. A new `ai` request replaces them.
+#[derive(Clone, Copy)]
+pub struct Suggested {
+    request: Option<RequestId>,
+    commands: [FixedString<MAX_COMMAND_LENGTH>; MAX_COMMANDS],
+    count: usize,
+    /// The answer asked for confirmation before any of its commands run.
+    requires_confirmation: bool,
+}
+
+impl Suggested {
+    pub const fn new() -> Self {
+        Self {
+            request: None,
+            commands: [FixedString::new(); MAX_COMMANDS],
+            count: 0,
+            requires_confirmation: false,
+        }
+    }
+
+    fn from_response(response: &AiResponse) -> Self {
+        let mut suggested = Self::new();
+        suggested.request = Some(response.request);
+        suggested.requires_confirmation = response.requires_confirmation;
+        for command in response.commands() {
+            suggested.commands[suggested.count].push_str(command);
+            suggested.count += 1;
+        }
+        suggested
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The suggestion shown as number `number` (1-based).
+    pub fn get(&self, number: usize) -> Option<&str> {
+        number
+            .checked_sub(1)
+            .filter(|&index| index < self.count)
+            .map(|index| self.commands[index].as_str())
+    }
+}
+
+impl Default for Suggested {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Why a suggested command may not run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    /// The text does not parse as a command line.
+    Invalid,
+    /// No command has this name.
+    Unknown,
+    /// The command exists but the argument count is wrong.
+    BadArguments,
+    /// `run` itself: a suggestion may not trigger other suggestions.
+    Recursive,
+    /// The command is classified [`Risk::Destructive`].
+    Destructive,
+}
+
+impl Blocked {
+    pub fn reason(self) -> &'static str {
+        match self {
+            Blocked::Invalid => "it is not a valid command line",
+            Blocked::Unknown => "it is not a Psydian command",
+            Blocked::BadArguments => "it has the wrong number of arguments",
+            Blocked::Recursive => "a suggestion cannot run other suggestions",
+            Blocked::Destructive => "it is destructive; type it yourself if you really mean it",
+        }
+    }
+}
+
+/// Validates a suggested command line exactly as the shell would validate a
+/// typed one, then applies the AI policy on top. Returns the command entry
+/// the line would run.
+pub fn check_suggestion(line: &str) -> Result<&'static Command, Blocked> {
+    let parsed = match super::parser::parse(line) {
+        Ok(Some(parsed)) => parsed,
+        Ok(None) | Err(_) => return Err(Blocked::Invalid),
+    };
+    let entry = find(parsed.name).ok_or(Blocked::Unknown)?;
+    let arg_count = parsed.args().len();
+    if arg_count < entry.min_args || arg_count > entry.max_args {
+        return Err(Blocked::BadArguments);
+    }
+    if entry.name == "run" {
+        return Err(Blocked::Recursive);
+    }
+    if entry.risk == Risk::Destructive {
+        return Err(Blocked::Destructive);
+    }
+    Ok(entry)
+}
 
 /// Looks a command up by its exact name.
 pub fn find(name: &str) -> Option<&'static Command> {
@@ -190,6 +376,7 @@ fn help(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
         let entry = find(name).ok_or(CommandError::InvalidArguments("no such command"))?;
         println!("{}", entry.summary);
         println!("Usage: {}", entry.usage);
+        println!("Risk:  {} ({})", entry.risk, entry.risk.explanation());
         if entry.confirmation.is_some() {
             println!("Asks for confirmation before running.");
         }
@@ -436,7 +623,7 @@ fn diag(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
     }
 }
 
-fn ai(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
+fn ai(shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
     // The kernel never talks to an AI service itself. The question goes out
     // as an `ai_request` frame on the serial diagnostic channel, where the
     // host-side AI Bridge picks it up. The most recent diagnostic is
@@ -446,12 +633,15 @@ fn ai(_shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
         CommandError::Unavailable("Diagnostic communication failed: request is too long."),
     )?;
     println!("[AI] Request {} sent to the AI Bridge. Waiting for the answer (Ctrl+C cancels)...", request);
+    // Suggestions from an older answer must not be run in reply to this one.
+    shell.suggested = Suggested::new();
 
     // The answer comes back as an `ai_response` frame on the serial line.
     // Whatever arrives is only displayed: suggested commands are shown, never
     // run, and any failure leaves the shell working (fail closed).
     match inbound::wait_for_reply(request) {
         Ok(Reply::Answer(response)) => {
+            shell.suggested = Suggested::from_response(&response);
             print_ai_response(&response);
             Ok(())
         }
@@ -513,9 +703,128 @@ fn print_ai_response(response: &AiResponse) {
         }
     }
     if response.commands().next().is_some() {
-        println!("  Suggested commands (not run automatically):");
-        for command in response.commands() {
-            println!("    > {}", Printable(command));
+        println!("  Suggested commands (nothing runs until you type 'run <number>'):");
+        print_suggested(&Suggested::from_response(response));
+    }
+}
+
+/// One line per suggested command, with the check result the user will get.
+fn print_suggested(suggested: &Suggested) {
+    const COLUMN: usize = 24;
+    for number in 1..=suggested.len() {
+        let line = suggested.get(number).unwrap_or("");
+        // `Printable` writes character by character, so pad by hand.
+        print!("    {}. {}", number, Printable(line));
+        for _ in line.chars().count()..COLUMN {
+            print!(" ");
+        }
+        match check_suggestion(line) {
+            Ok(entry) => println!(" [{}]", entry.risk),
+            Err(blocked) => println!(" [blocked: {}]", blocked.reason()),
+        }
+    }
+}
+
+/// `run [number]`: runs one command from the latest AI answer.
+///
+/// ```text
+/// suggestion ─► parser ─► registry lookup ─► argument check ─► risk policy
+///                                                                  │
+///                 execution (same path as typed) ◄─ confirmation ◄─┘
+/// ```
+///
+/// The AI never gets here on its own: only the user typing `run` does.
+fn run(shell: &mut Shell, command: &ParsedCommand) -> CommandResult {
+    let Some(selector) = command.arg(0) else {
+        if shell.suggested.is_empty() {
+            println!("No suggested commands. Ask the assistant first: ai <question>");
+        } else {
+            if let Some(request) = shell.suggested.request {
+                println!("Commands suggested in the answer to {}:", request);
+            }
+            print_suggested(&shell.suggested);
+            println!("Type 'run <number>' to run one.");
+        }
+        return Ok(());
+    };
+
+    if shell.suggested.is_empty() {
+        return Err(CommandError::Unavailable(
+            "No suggested commands. Ask the assistant first: ai <question>",
+        ));
+    }
+    let number = selector
+        .parse::<usize>()
+        .map_err(|_| CommandError::InvalidArguments("expected the number of a suggested command"))?;
+    // Copied out so the suggestion survives a command that replaces the list.
+    let line: FixedString<MAX_COMMAND_LENGTH> = FixedString::from_str_truncated(
+        shell
+            .suggested
+            .get(number)
+            .ok_or(CommandError::InvalidArguments("no suggested command has this number"))?,
+    );
+    let request = shell.suggested.request;
+
+    let entry = match check_suggestion(line.as_str()) {
+        Ok(entry) => entry,
+        Err(blocked) => {
+            logger::record(
+                Level::Warn,
+                Subsystem::Ai,
+                "AI-011",
+                format_args!("Blocked AI-suggested command '{}': {}", Printable(line.as_str()), blocked.reason()),
+            );
+            println!("[AI] Not running '{}': {}.", Printable(line.as_str()), blocked.reason());
+            return Err(CommandError::Unavailable("The suggested command was blocked."));
+        }
+    };
+
+    if entry.risk > Risk::Safe || shell.suggested.requires_confirmation {
+        println!(
+            "[AI] Suggested command: {} (risk: {}, {})",
+            Printable(line.as_str()),
+            entry.risk,
+            entry.risk.explanation()
+        );
+        if !shell.confirm("This command was suggested by the AI assistant, not typed by you.") {
+            logger::record(
+                Level::Info,
+                Subsystem::Ai,
+                "AI-012",
+                format_args!("AI-suggested command '{}' declined", Printable(line.as_str())),
+            );
+            return Err(CommandError::Cancelled);
+        }
+    }
+
+    logger::record(
+        Level::Info,
+        Subsystem::Ai,
+        "AI-010",
+        format_args!(
+            "Running AI-suggested command '{}'{}{}",
+            Printable(line.as_str()),
+            if request.is_some() { " from " } else { "" },
+            OptionalId(request)
+        ),
+    );
+    println!("[AI] Running suggested command: {}", Printable(line.as_str()));
+    // Exactly the path a typed line takes: parse, validate, confirm, run.
+    match shell.execute(line.as_str()) {
+        super::Outcome::Executed => Ok(()),
+        super::Outcome::Cancelled => Err(CommandError::Cancelled),
+        _ => Err(CommandError::Unavailable("The suggested command did not complete.")),
+    }
+}
+
+/// Prints a request id, or nothing.
+struct OptionalId(Option<RequestId>);
+
+impl fmt::Display for OptionalId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            Some(id) => write!(f, "{}", id),
+            None => Ok(()),
         }
     }
 }
@@ -645,6 +954,62 @@ fn destructive_commands_require_confirmation() {
     assert!(find("panic-test").unwrap().confirmation.is_some());
     assert!(find("fault-test").unwrap().confirmation.is_some());
     assert!(find("help").unwrap().confirmation.is_none());
+}
+
+#[test_case]
+fn risk_levels_match_the_policy() {
+    // Everything destructive also asks the user when typed by hand ...
+    for command in COMMANDS {
+        if command.risk == Risk::Destructive {
+            assert!(command.confirmation.is_some(), "{} needs a confirmation", command.name);
+        }
+    }
+    // ... and the classification of the existing commands is fixed.
+    for (name, risk) in [
+        ("help", Risk::Safe),
+        ("meminfo", Risk::Safe),
+        ("diag", Risk::Safe),
+        ("ai", Risk::Sensitive),
+        ("shutdown", Risk::Privileged),
+        ("panic-test", Risk::Destructive),
+        ("fault-test", Risk::Destructive),
+    ] {
+        assert_eq!(find(name).unwrap().risk, risk, "{}", name);
+    }
+}
+
+#[test_case]
+fn suggestions_are_checked_like_typed_commands() {
+    assert_eq!(check_suggestion("meminfo").map(|c| c.name), Ok("meminfo"));
+    assert_eq!(check_suggestion("  diag last ").map(|c| c.name), Ok("diag"));
+    assert_eq!(check_suggestion("shutdown").map(|c| c.risk), Ok(Risk::Privileged));
+    assert_eq!(check_suggestion("ai hi").map(|c| c.risk), Ok(Risk::Sensitive));
+    assert_eq!(check_suggestion("").err(), Some(Blocked::Invalid));
+    assert_eq!(check_suggestion("help;shutdown").err(), Some(Blocked::Invalid));
+    assert_eq!(check_suggestion("echo \"open").err(), Some(Blocked::Invalid));
+    assert_eq!(check_suggestion("rm -rf /").err(), Some(Blocked::Unknown));
+    assert_eq!(check_suggestion("MEMINFO").err(), Some(Blocked::Unknown));
+    assert_eq!(check_suggestion("meminfo now").err(), Some(Blocked::BadArguments));
+    assert_eq!(check_suggestion("run 1").err(), Some(Blocked::Recursive));
+    assert_eq!(check_suggestion("panic-test").err(), Some(Blocked::Destructive));
+    assert_eq!(check_suggestion("fault-test heap").err(), Some(Blocked::Destructive));
+}
+
+#[test_case]
+fn suggested_numbers_are_one_based_and_bounded() {
+    let suggested = Suggested::new();
+    assert!(suggested.is_empty());
+    assert_eq!(suggested.get(1), None);
+
+    let mut suggested = Suggested::new();
+    suggested.commands[0].push_str("meminfo");
+    suggested.commands[1].push_str("diag last");
+    suggested.count = 2;
+    assert_eq!(suggested.get(0), None);
+    assert_eq!(suggested.get(1), Some("meminfo"));
+    assert_eq!(suggested.get(2), Some("diag last"));
+    assert_eq!(suggested.get(3), None);
+    assert_eq!(suggested.get(usize::MAX), None);
 }
 
 #[test_case]
