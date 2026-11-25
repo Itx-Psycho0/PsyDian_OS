@@ -321,8 +321,8 @@ AI response. The envelope `id` is the id of the request being answered (`req-NNN
 |---|---|
 | `summary` | Required, non-empty string, at most 480 characters |
 | `suggestions` | Optional array of at most 4 strings, each at most 160 characters |
-| `commands` | Optional array of at most 3 strings, each at most 80 characters. Shown as suggestions only; the kernel never runs them by itself |
-| `requiresConfirmation` | Optional boolean, default `false` |
+| `commands` | Optional array of at most 3 strings, each at most 80 characters. Shown numbered, each with its risk level. Nothing runs unless the user types `run <number>` (section 15) |
+| `requiresConfirmation` | Optional boolean, default `false`. When `true`, every suggested command asks for a y/N confirmation before it runs, even a safe one |
 
 Unknown payload fields (for example `limitations`) are ignored. Values that are too long are rejected, never truncated.
 
@@ -342,7 +342,7 @@ Bridge status. A `status` frame such as `{"type":"status","version":1,"id":"stat
 
 | Outcome | Shell result | Log code |
 |---|---|---|
-| Valid `ai_response` | Summary, suggestions and suggested commands are printed | - |
+| Valid `ai_response` | Summary, suggestions and numbered suggested commands are printed; nothing runs | - |
 | `error` frame | The bridge's code and message are printed; command fails | `AI-001` |
 | Invalid reply for this request | "invalid response"; command fails | `AI-003` |
 | No reply, bridge seen before | "did not answer in time"; command fails | `AI-002` |
@@ -545,6 +545,57 @@ Execution
 ```
 
 The API layer must never grant the AI direct command-execution authority.
+
+## 15.1 How the Kernel Implements It
+
+The kernel stores the `commands` of the latest valid `ai_response` (at most 3). They run only when the user types `run <number>`; `run` on its own lists them again. A new `ai` request discards the old list, so an old answer can never be run in reply to a new question.
+
+`run <number>` applies these checks in order:
+
+1. **Parser.** The suggestion is parsed exactly like a typed line. Anything the parser rejects (unterminated quote, `;`, invalid name) is blocked.
+2. **Registry.** The command must exist (exact, case-sensitive name).
+3. **Arguments.** The argument count must match the command's usage.
+4. **Recursion.** A suggestion may not be `run` itself.
+5. **Risk policy.** Every command has a fixed risk level (Docs/11-security-design.md, section 5.2):
+
+| Risk | Commands | Suggested by the AI |
+|---|---|---|
+| Safe | `help`, `clear`, `info`, `meminfo`, `uptime`, `echo`, `history`, `logs`, `diag`, `run` | Runs at once (asks first if `requiresConfirmation` is `true`) |
+| Sensitive | `ai` (sends text to the host) | Asks for y/N confirmation |
+| Privileged | `shutdown` | Asks for y/N confirmation |
+| Destructive | `panic-test`, `fault-test` | Blocked. The user can still type it, and it then asks for confirmation as usual |
+
+A command that passes runs through `Shell::execute`, the same path a typed line takes. Only an explicit `y` or `yes` counts as confirmation.
+
+| Event | Log code |
+|---|---|
+| Suggested command run | `AI-010` (INFO) |
+| Suggested command blocked by a check | `AI-011` (WARN) |
+| Suggested command declined at the confirmation | `AI-012` (INFO), then `CMD-004` |
+
+Example session:
+
+```text
+psydian> ai why did the heap fail?
+[AI] Answer to req-002:
+  A program asked the kernel heap for 64 MiB, but the whole heap is only 1024 KiB ...
+  Suggested commands (nothing runs until you type 'run <number>'):
+    1. meminfo                  [safe]
+    2. shutdown                 [privileged]
+    3. panic-test               [blocked: it is destructive; type it yourself if you really mean it]
+psydian> run 1
+[AI] Running suggested command: meminfo
+Physical memory
+  ...
+psydian> run 2
+[AI] Suggested command: shutdown (risk: privileged, changes the state of the system)
+[WARN] This command was suggested by the AI assistant, not typed by you.
+Proceed? [y/N] n
+Cancelled.
+psydian> run 3
+[AI] Not running 'panic-test': it is destructive; type it yourself if you really mean it.
+[ERROR] The suggested command was blocked.
+```
 
 ---
 

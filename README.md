@@ -18,7 +18,7 @@ User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bri
 | 4 | Keyboard and serial input, shell | Done |
 | 5 | Logger levels, diagnostics, panic handling, message protocol | Done |
 | 6 | Host-side AI Bridge | In progress (kernel side done: receiving and validating `ai_response` frames) |
-| 7 | External AI integration and safety validation | Not started |
+| 7 | External AI integration and safety validation | In progress (kernel side done: risk levels and `run` for AI-suggested commands) |
 | 8 | Integration, testing, demo | Not started |
 
 ## Prerequisites
@@ -53,6 +53,18 @@ cargo ktest
 
 Runs every kernel unit and integration test inside QEMU.
 
+```bash
+python3 scripts/mock-bridge.py
+```
+
+Boots Psydian headless with a mock AI Bridge attached, so `ai` questions get canned answers and you can try `run`. No AI service or API key is needed. The real AI Bridge is developed separately.
+
+```bash
+python3 scripts/mock-bridge.py --check
+```
+
+End-to-end smoke test: boots the kernel, drives the shell through the mock bridge (answers, AI command safety, bridge errors, invalid answers, cancel) and checks every step.
+
 ## Shell commands
 
 | Command | What it does |
@@ -67,11 +79,25 @@ Runs every kernel unit and integration test inside QEMU.
 | `logs [count] [level]` | Recent kernel log records |
 | `diag [list \| last \| <n> \| send <n>]` | Show or re-send diagnostic records |
 | `ai <question...>` | Send a question to the AI Bridge and show its answer (waits 3 s without a bridge, 30 s with one; Ctrl+C cancels) |
+| `run [number]` | Run a command the AI suggested in its last answer, after the safety checks; without a number, list them |
 | `panic-test` | Trigger a controlled kernel panic (asks for confirmation) |
 | `fault-test <scenario>` | Inject a fault: `breakpoint`, `heap`, `page-fault`, `divide-by-zero`, `invalid-opcode`, `stack-overflow` (asks for confirmation) |
 | `shutdown` | Stop the system (exits QEMU) |
 
 Tab completes command names, Up/Down browse the history, Ctrl+C abandons the current line and Ctrl+L clears the screen.
+
+### AI-suggested commands
+
+The AI never runs anything. Its suggested commands are listed with a number and a risk level, and run only when you type `run <number>`:
+
+| Risk | Commands | When suggested by the AI |
+|---|---|---|
+| safe | `help`, `info`, `meminfo`, `uptime`, `logs`, `diag`, ... | runs |
+| sensitive | `ai` | asks y/N first |
+| privileged | `shutdown` | asks y/N first |
+| destructive | `panic-test`, `fault-test` | blocked |
+
+`help <command>` shows a command's risk level. The full policy is in [Docs/11-security-design.md](Docs/11-security-design.md) (section 5.2).
 
 ## What a diagnostic looks like
 
@@ -90,6 +116,7 @@ The first line is the human-readable log record. The line starting with `@PSY ` 
 Cargo.toml          workspace + host-side launcher package
 build.rs            builds the bootable disk image from the kernel
 src/main.rs         launcher: runs QEMU for `cargo run` and for kernel tests
+scripts/            mock AI Bridge and smoke test, QEMU helper
 kernel/
   src/
     main.rs         kernel entry point

@@ -385,6 +385,13 @@ Log lines use the format `[LEVEL][SUBSYSTEM][CODE] message`. Codes marked *diagn
 | `CMD-004` | INFO | Command cancelled at the confirmation prompt |
 | `CMD-010` | INFO | Command executed |
 | `COMM-001` | ERROR | Message did not fit into a protocol frame and was not sent |
+| `COMM-002` | WARN | Frame received from the AI Bridge was rejected (malformed or invalid) |
+| `AI-001` | WARN | AI Bridge reported an error for a request |
+| `AI-002` | WARN | AI Bridge did not answer before the timeout |
+| `AI-003` | WARN | AI answer rejected by validation |
+| `AI-010` | INFO | AI-suggested command run by the user with `run` |
+| `AI-011` | WARN | AI-suggested command blocked by the safety checks |
+| `AI-012` | INFO | AI-suggested command declined at the confirmation prompt |
 | `EXC-000` | PANIC | Divide error (*diagnostic*) |
 | `EXC-003` | INFO | Breakpoint; execution continues (*diagnostic*) |
 | `EXC-006` | PANIC | Invalid opcode (*diagnostic*) |
