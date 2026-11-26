@@ -169,6 +169,10 @@ fi
 step "Building the kernel (the first build downloads the Rust nightly toolchain; a few minutes)"
 (cd "$PSYDIAN_DIR" && cargo build --quiet)
 ok "kernel and bootable disk image built"
+if [ -f "$PSYDIAN_DIR/ai-bridge/Cargo.toml" ]; then
+  (cd "$PSYDIAN_DIR" && cargo build --quiet --manifest-path ai-bridge/Cargo.toml)
+  ok "AI Bridge built"
+fi
 
 # --- 5. the psydian command --------------------------------------------------
 step "Installing the 'psydian' command"
@@ -213,6 +217,7 @@ ${GREEN}${BOLD}Psydian is installed.${RESET}
 
   psydian            boot Psydian (QEMU window if you have a display, else in this terminal)
   psydian demo       boot with a mock AI Bridge: try 'ai hello', then 'run 1'
+  psydian ai         boot with the real AI Bridge (set ANTHROPIC_API_KEY first)
   psydian check      quick end-to-end test (about 30 seconds)
   psydian test       run the full kernel test suite
   psydian update     download the latest version and rebuild

@@ -31,3 +31,11 @@ jobs:
 
       - name: Kernel unit and integration tests (in QEMU)
         run: ~/.local/bin/psydian test
+
+      - name: AI Bridge unit tests
+        if: hashFiles('ai-bridge/Cargo.toml') != ''
+        run: cargo test --manifest-path ai-bridge/Cargo.toml
+
+      - name: AI Bridge end-to-end self-test (real kernel, mock provider)
+        if: hashFiles('ai-bridge/Cargo.toml') != ''
+        run: ~/.local/bin/psydian ai-check

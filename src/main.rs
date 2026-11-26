@@ -4,6 +4,9 @@
 //!                               serial port attached to this terminal.
 //! * `cargo run -- --headless`   the same without a window (serial console only).
 //! * `cargo run -- --debug`      also logs CPU exceptions/resets to `qemu.log`.
+//! * `cargo run -- --serial-tcp PORT`  serial port on 127.0.0.1:PORT instead
+//!                               of this terminal; QEMU waits until a client
+//!                               (the AI Bridge) connects.
 //! * `cargo ktest`               cargo calls this binary once per kernel test
 //!                               executable (see `.cargo/config.toml`). The ELF
 //!                               is wrapped in a bootable image, run headless,
@@ -27,13 +30,22 @@ fn main() -> ExitCode {
     let mut elf: Option<PathBuf> = None;
     let mut headless = false;
     let mut debug = false;
+    let mut serial_tcp: Option<u16> = None;
 
-    for arg in std::env::args().skip(1) {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--headless" => headless = true,
             "--debug" => debug = true,
+            "--serial-tcp" => match args.next().and_then(|port| port.parse().ok()) {
+                Some(port) => serial_tcp = Some(port),
+                None => {
+                    eprintln!("--serial-tcp needs a port number");
+                    return ExitCode::FAILURE;
+                }
+            },
             "-h" | "--help" => {
-                println!("usage: cargo run [-- [--headless] [--debug] [KERNEL_ELF]]");
+                println!("usage: cargo run [-- [--headless] [--debug] [--serial-tcp PORT] [KERNEL_ELF]]");
                 return ExitCode::SUCCESS;
             }
             other if elf.is_none() && Path::new(other).is_file() => {
@@ -52,9 +64,9 @@ fn main() -> ExitCode {
                 Ok(image) => image,
                 Err(code) => return code,
             };
-            run_interactive(&image, headless, debug)
+            run_interactive(&image, headless, debug, serial_tcp)
         }
-        None => run_interactive(Path::new(KERNEL_IMAGE), headless, debug),
+        None => run_interactive(Path::new(KERNEL_IMAGE), headless, debug, serial_tcp),
     }
 }
 
@@ -83,19 +95,25 @@ fn create_image(elf: &Path) -> Result<PathBuf, ExitCode> {
     Ok(image)
 }
 
-fn qemu(image: &Path) -> Command {
+fn qemu(image: &Path, serial: &str) -> Command {
     let mut cmd = Command::new("qemu-system-x86_64");
     // snapshot=on: the kernel never writes to its disk, and a read-only boot
     // lets several QEMU instances (a demo and the tests, say) share the image.
     cmd.arg("-drive")
         .arg(format!("format=raw,snapshot=on,file={}", image.display()))
         .args(["-device", "isa-debug-exit,iobase=0xf4,iosize=0x04"])
-        .args(["-serial", "stdio"]);
+        .args(["-serial", serial]);
     cmd
 }
 
-fn run_interactive(image: &Path, headless: bool, debug: bool) -> ExitCode {
-    let mut cmd = qemu(image);
+fn run_interactive(image: &Path, headless: bool, debug: bool, serial_tcp: Option<u16>) -> ExitCode {
+    let serial = match serial_tcp {
+        // wait=on: boot only once the bridge is connected, so it sees the
+        // kernel's first frames.
+        Some(port) => format!("tcp:127.0.0.1:{port},server=on,wait=on"),
+        None => "stdio".to_string(),
+    };
+    let mut cmd = qemu(image, &serial);
     if headless {
         cmd.args(["-display", "none"]);
     }
@@ -127,7 +145,7 @@ fn run_test(elf: &Path) -> ExitCode {
         Err(code) => return code,
     };
 
-    let mut cmd = qemu(&image);
+    let mut cmd = qemu(&image, "stdio");
     cmd.args(["-display", "none", "-no-reboot"]).stdin(Stdio::null());
 
     let mut child = match cmd.spawn() {
