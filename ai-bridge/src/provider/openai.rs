@@ -1,32 +1,38 @@
-//! Any service with an OpenAI-style `/chat/completions` endpoint, such as a
-//! local Ollama model (`AI_PROVIDER=ollama`, no API key needed). Useful when
-//! no paid API key is available.
+//! Services with an OpenAI-style `/chat/completions` endpoint. These cover
+//! the free options: Google Gemini (`AI_PROVIDER=gemini`, free key from
+//! Google AI Studio), an OmniRoute gateway (`omniroute`), OpenRouter `:free`
+//! models (`openrouter`) and a local Ollama model (`ollama`, no key).
 
 use super::{Provider, ProviderError, agent, http_error};
-use crate::config::{Config, Secret};
+use crate::config::{Config, ProviderKind, Secret};
 use crate::context::Context;
+use crate::prompt;
 use serde_json::{Value, json};
 use std::time::Duration;
 
 pub struct OpenAiCompatible {
+    kind: ProviderKind,
     endpoint: String,
     model: String,
     api_key: Secret,
     timeout: Duration,
+    effort: String,
 }
 
 impl OpenAiCompatible {
     pub fn new(config: &Config) -> Self {
         Self {
+            kind: config.provider,
             endpoint: config.endpoint.clone(),
             model: config.model.clone(),
             api_key: config.api_key.clone(),
             timeout: config.timeout,
+            effort: config.effort.clone(),
         }
     }
 
     pub fn request_body(&self, system: &str, user: &str) -> Value {
-        json!({
+        let mut body = json!({
             "model": self.model,
             "messages": [
                 { "role": "system", "content": system },
@@ -34,7 +40,26 @@ impl OpenAiCompatible {
             ],
             "response_format": { "type": "json_object" },
             "stream": false
-        })
+        });
+        if self.kind == ProviderKind::Gemini {
+            // Gemini supports the full schema (structured output) and a
+            // reasoning level; low keeps answers inside the kernel's wait.
+            body["response_format"] = json!({
+                "type": "json_schema",
+                "json_schema": { "name": "psydian_answer", "schema": prompt::answer_schema() }
+            });
+            body["reasoning_effort"] = json!(gemini_effort(&self.effort));
+        }
+        body
+    }
+}
+
+/// Gemini accepts low, medium and high.
+fn gemini_effort(effort: &str) -> &'static str {
+    match effort {
+        "medium" => "medium",
+        "high" | "xhigh" | "max" => "high",
+        _ => "low",
     }
 }
 
@@ -55,7 +80,7 @@ pub fn answer_text(response: &Value) -> Result<String, ProviderError> {
 
 impl Provider for OpenAiCompatible {
     fn describe(&self) -> String {
-        format!("openai-compatible {} at {}", self.model, self.endpoint)
+        format!("{} {} at {}", self.kind.name(), self.model, self.endpoint)
     }
 
     fn complete(
@@ -86,6 +111,39 @@ impl Provider for OpenAiCompatible {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn provider(vars: &[(&str, &str)]) -> OpenAiCompatible {
+        let config = Config::from_lookup(|name| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| v.to_string())
+        })
+        .unwrap();
+        OpenAiCompatible::new(&config)
+    }
+
+    #[test]
+    fn gemini_gets_the_answer_schema() {
+        let p = provider(&[("GEMINI_API_KEY", "g-test")]);
+        let body = p.request_body("sys", "user");
+        assert_eq!(body["model"], "gemini-flash-latest");
+        assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(
+            body["response_format"]["json_schema"]["schema"],
+            prompt::answer_schema()
+        );
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["messages"][0]["content"], "sys");
+    }
+
+    #[test]
+    fn other_services_get_plain_json_mode() {
+        let p = provider(&[("AI_PROVIDER", "omniroute"), ("AI_MODEL", "combo")]);
+        let body = p.request_body("sys", "user");
+        assert_eq!(body["response_format"]["type"], "json_object");
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(p.describe().starts_with("omniroute combo"));
+    }
 
     #[test]
     fn reads_chat_completions() {
