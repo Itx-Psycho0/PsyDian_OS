@@ -24,6 +24,8 @@ Then:
 |---|---|
 | `psydian` | Boot Psydian (QEMU window if there is a display, otherwise in the terminal) |
 | `psydian demo` | Boot with a mock AI Bridge: try `ai hello`, then `run 1` |
+| `psydian ai` | Boot with the real AI Bridge (`ai-bridge/`): set `ANTHROPIC_API_KEY` first, or use `AI_PROVIDER=ollama` for a free local model. Add `--window` for a QEMU window |
+| `psydian ai-check` | AI Bridge self-test with the real kernel (no API key needed) |
 | `psydian check` | End-to-end smoke test (about 30 seconds) |
 | `psydian test` | Full kernel test suite |
 | `psydian update` | Download the latest version and rebuild |
@@ -72,6 +74,12 @@ cargo run -- --headless
 ```
 
 Same, without a window (serial console only). Add `--debug` to log CPU exceptions and resets to `qemu.log`.
+
+```bash
+cargo run -- --serial-tcp 4555
+```
+
+Opens the serial port on `127.0.0.1:4555` instead of the terminal, and waits until a client connects. This is how the AI Bridge attaches while QEMU shows its window.
 
 ```bash
 cargo ktest
