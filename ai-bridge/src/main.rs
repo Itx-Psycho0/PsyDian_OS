@@ -48,10 +48,16 @@ Boots Psydian and answers its `ai` questions with an AI service.
   -h, --help           this text
 
 Configuration (environment):
-  AI_PROVIDER    anthropic (default), openai / ollama, or mock
+  AI_PROVIDER    gemini, omniroute, openrouter, ollama / openai,
+                 anthropic or mock; unset: picked from the key that is set
+                 (gemini when none is)
+  GEMINI_API_KEY, OMNIROUTE_API_KEY, OPENROUTER_API_KEY,
   ANTHROPIC_API_KEY or AI_API_KEY   the API key (never logged)
-  AI_MODEL       default claude-opus-5-5 (anthropic) / llama3.2 (ollama)
-  AI_ENDPOINT    API URL (https, or http://localhost for local models)
+  AI_MODEL       default gemini-flash-latest (gemini), llama3.2 (ollama),
+                 claude-opus-5-5 (anthropic); omniroute and openrouter
+                 need one
+  AI_ENDPOINT    API URL (https, or http://localhost for local services);
+                 a base URL such as http://localhost:20128/v1 is fine
   AI_EFFORT      low (default), medium, high, xhigh, max
   AI_TIMEOUT     seconds per AI call, 1-28 (default 25)
   AI_MAX_REQUESTS_PER_MINUTE   default 10
@@ -441,18 +447,18 @@ impl Session {
     }
 
     fn finish(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            if let Some(child) = child.as_mut() {
-                let deadline = Instant::now() + Duration::from_secs(5);
-                while Instant::now() < deadline {
-                    if let Ok(Some(_)) = child.try_wait() {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(100));
+        if let Ok(mut child) = self.child.lock()
+            && let Some(child) = child.as_mut()
+        {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if let Ok(Some(_)) = child.try_wait() {
+                    return;
                 }
-                let _ = child.kill();
-                let _ = child.wait();
+                std::thread::sleep(Duration::from_millis(100));
             }
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }
@@ -535,20 +541,18 @@ fn run_check(session: &Session) -> ExitCode {
             Duration::from_secs(20)
         };
         let mut ok = session.wait_for(expected, since, timeout);
-        if ok {
-            if !forbidden.is_empty() {
-                // Let the rest of the answer arrive, then look only at it.
-                session.wait_for("psydian> ", since, Duration::from_secs(5));
-                let output = session
-                    .output
-                    .lock()
-                    .map(|o| o[since..].to_string())
-                    .unwrap_or_default();
-                let answer = output
-                    .rfind("[AI] Answer to")
-                    .map_or("", |at| &output[at..]);
-                ok = forbidden.iter().all(|text| !answer.contains(text));
-            }
+        if ok && !forbidden.is_empty() {
+            // Let the rest of the answer arrive, then look only at it.
+            session.wait_for("psydian> ", since, Duration::from_secs(5));
+            let output = session
+                .output
+                .lock()
+                .map(|o| o[since..].to_string())
+                .unwrap_or_default();
+            let answer = output
+                .rfind("[AI] Answer to")
+                .map_or("", |at| &output[at..]);
+            ok = forbidden.iter().all(|text| !answer.contains(text));
         }
         let label = line.unwrap_or("(boot)");
         println!(

@@ -9,10 +9,18 @@ use std::time::Duration;
 /// Which AI service answers the questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
-    /// Claude through the Anthropic Messages API.
+    /// Claude through the Anthropic Messages API (paid key).
     Anthropic,
-    /// Any service with an OpenAI-style `/chat/completions` endpoint
-    /// (for example a local Ollama model).
+    /// Google Gemini through its OpenAI-compatible endpoint. Free API keys
+    /// from Google AI Studio.
+    Gemini,
+    /// OmniRoute, a self-hosted AI gateway (OpenAI-style API on port 20128)
+    /// that routes to free and paid providers.
+    OmniRoute,
+    /// OpenRouter (OpenAI-style API); models ending in `:free` cost nothing.
+    OpenRouter,
+    /// Any other service with an OpenAI-style `/chat/completions` endpoint
+    /// (by default a local Ollama model).
     OpenAiCompatible,
     /// Canned answers, no network. For testing and demos.
     Mock,
@@ -22,10 +30,64 @@ impl ProviderKind {
     pub fn parse(text: &str) -> Option<Self> {
         match text.trim().to_ascii_lowercase().as_str() {
             "anthropic" | "claude" => Some(Self::Anthropic),
+            "gemini" | "google" => Some(Self::Gemini),
+            "omniroute" => Some(Self::OmniRoute),
+            "openrouter" => Some(Self::OpenRouter),
             "openai" | "openai-compatible" | "ollama" => Some(Self::OpenAiCompatible),
             "mock" => Some(Self::Mock),
             _ => None,
         }
+    }
+
+    /// Short name for the log and the start-up line.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+            Self::OmniRoute => "omniroute",
+            Self::OpenRouter => "openrouter",
+            Self::OpenAiCompatible => "openai-compatible",
+            Self::Mock => "mock",
+        }
+    }
+
+    /// Whether this provider speaks the OpenAI-style chat completions API.
+    pub fn is_openai_style(self) -> bool {
+        matches!(
+            self,
+            Self::Gemini | Self::OmniRoute | Self::OpenRouter | Self::OpenAiCompatible
+        )
+    }
+
+    /// Environment variables that may hold this provider's API key, in order.
+    fn key_names(self) -> &'static [&'static str] {
+        match self {
+            Self::Anthropic => &["AI_API_KEY", "ANTHROPIC_API_KEY"],
+            Self::Gemini => &["AI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            Self::OmniRoute => &["AI_API_KEY", "OMNIROUTE_API_KEY"],
+            Self::OpenRouter => &["AI_API_KEY", "OPENROUTER_API_KEY"],
+            Self::OpenAiCompatible => &["AI_API_KEY", "OPENAI_API_KEY"],
+            Self::Mock => &[],
+        }
+    }
+
+    /// (default model, default endpoint). An empty model means the user
+    /// must choose one with `AI_MODEL`.
+    fn defaults(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Anthropic => (DEFAULT_ANTHROPIC_MODEL, DEFAULT_ANTHROPIC_ENDPOINT),
+            Self::Gemini => (DEFAULT_GEMINI_MODEL, DEFAULT_GEMINI_ENDPOINT),
+            Self::OmniRoute => ("", DEFAULT_OMNIROUTE_ENDPOINT),
+            Self::OpenRouter => ("", DEFAULT_OPENROUTER_ENDPOINT),
+            Self::OpenAiCompatible => (DEFAULT_OPENAI_MODEL, DEFAULT_OPENAI_ENDPOINT),
+            Self::Mock => ("mock", ""),
+        }
+    }
+
+    /// Whether calls fail without an API key. Local services (Ollama,
+    /// OmniRoute) can run without one.
+    fn needs_key(self) -> bool {
+        matches!(self, Self::Anthropic | Self::Gemini | Self::OpenRouter)
     }
 }
 
@@ -74,6 +136,11 @@ pub struct Config {
 
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-latest";
+pub const DEFAULT_GEMINI_ENDPOINT: &str =
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+pub const DEFAULT_OMNIROUTE_ENDPOINT: &str = "http://localhost:20128/v1/chat/completions";
+pub const DEFAULT_OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 pub const DEFAULT_OPENAI_ENDPOINT: &str = "http://localhost:11434/v1/chat/completions";
 pub const DEFAULT_OPENAI_MODEL: &str = "llama3.2";
 pub const DEFAULT_TIMEOUT_SECS: u64 = 25;
@@ -100,25 +167,13 @@ impl Config {
         let provider = match get("AI_PROVIDER") {
             Some(name) => ProviderKind::parse(&name).ok_or_else(|| {
                 ConfigError(format!(
-                    "AI_PROVIDER '{name}' is not supported (use anthropic, openai or mock)"
+                    "AI_PROVIDER '{name}' is not supported (use gemini, omniroute, \
+                     openrouter, ollama, openai, anthropic or mock)"
                 ))
             })?,
-            None => ProviderKind::Anthropic,
+            None => Self::detect_provider(&get),
         };
-
-        let (default_model, default_endpoint, key_names): (&str, &str, &[&str]) = match provider {
-            ProviderKind::Anthropic => (
-                DEFAULT_ANTHROPIC_MODEL,
-                DEFAULT_ANTHROPIC_ENDPOINT,
-                &["AI_API_KEY", "ANTHROPIC_API_KEY"],
-            ),
-            ProviderKind::OpenAiCompatible => (
-                DEFAULT_OPENAI_MODEL,
-                DEFAULT_OPENAI_ENDPOINT,
-                &["AI_API_KEY", "OPENAI_API_KEY"],
-            ),
-            ProviderKind::Mock => ("mock", "", &[]),
-        };
+        let (default_model, default_endpoint) = provider.defaults();
 
         let timeout_secs = match get("AI_TIMEOUT") {
             Some(text) => text
@@ -154,7 +209,8 @@ impl Config {
             None => 10,
         };
 
-        let api_key = key_names
+        let api_key = provider
+            .key_names()
             .iter()
             .find_map(|name| get(name))
             .map(Secret::new)
@@ -163,7 +219,11 @@ impl Config {
         Ok(Self {
             provider,
             model: get("AI_MODEL").unwrap_or_else(|| default_model.to_string()),
-            endpoint: get("AI_ENDPOINT").unwrap_or_else(|| default_endpoint.to_string()),
+            endpoint: match get("AI_ENDPOINT") {
+                Some(url) if provider.is_openai_style() => chat_completions_url(&url),
+                Some(url) => url.trim().to_string(),
+                None => default_endpoint.to_string(),
+            },
             api_key,
             timeout: Duration::from_secs(timeout_secs),
             effort,
@@ -171,27 +231,68 @@ impl Config {
         })
     }
 
+    /// With no `AI_PROVIDER`, the first provider whose own key variable is
+    /// set; Gemini (free keys) when none is.
+    fn detect_provider(get: &impl Fn(&str) -> Option<String>) -> ProviderKind {
+        [
+            ("GEMINI_API_KEY", ProviderKind::Gemini),
+            ("GOOGLE_API_KEY", ProviderKind::Gemini),
+            ("OMNIROUTE_API_KEY", ProviderKind::OmniRoute),
+            ("OPENROUTER_API_KEY", ProviderKind::OpenRouter),
+            ("ANTHROPIC_API_KEY", ProviderKind::Anthropic),
+        ]
+        .into_iter()
+        .find(|(name, _)| get(name).is_some())
+        .map_or(ProviderKind::Gemini, |(_, kind)| kind)
+    }
+
     /// Why AI calls cannot work with this configuration, if they cannot.
     /// The bridge still starts: every request then gets an `AI_NOT_CONFIGURED`
     /// error frame and the kernel keeps working (SEC-009).
     pub fn problem(&self) -> Option<String> {
-        match self.provider {
-            ProviderKind::Anthropic if self.api_key.is_empty() => Some(
-                "no API key: set ANTHROPIC_API_KEY (or AI_API_KEY), or use AI_PROVIDER=mock"
-                    .to_string(),
-            ),
-            ProviderKind::Anthropic | ProviderKind::OpenAiCompatible
-                if !(self.endpoint.starts_with("https://")
-                    || self.endpoint.starts_with("http://localhost")
-                    || self.endpoint.starts_with("http://127.0.0.1")) =>
-            {
-                Some(format!(
-                    "AI_ENDPOINT must use https:// (plain http is only allowed for localhost): {}",
-                    self.endpoint
-                ))
-            }
-            _ => None,
+        if self.provider == ProviderKind::Mock {
+            return None;
         }
+        if self.provider.needs_key() && self.api_key.is_empty() {
+            return Some(match self.provider {
+                ProviderKind::Gemini => "no API key: set GEMINI_API_KEY (free from \
+                    https://aistudio.google.com/apikey), or use AI_PROVIDER=ollama, \
+                    omniroute or mock"
+                    .to_string(),
+                ProviderKind::OpenRouter => "no API key: set OPENROUTER_API_KEY".to_string(),
+                _ => "no API key: set ANTHROPIC_API_KEY (or AI_API_KEY), or use a free \
+                    provider such as AI_PROVIDER=gemini"
+                    .to_string(),
+            });
+        }
+        if self.model.trim().is_empty() {
+            return Some(format!(
+                "no model: set AI_MODEL to a model name from your {} account \
+                 (for OmniRoute a model or combo from its dashboard)",
+                self.provider.name()
+            ));
+        }
+        if !(self.endpoint.starts_with("https://")
+            || self.endpoint.starts_with("http://localhost")
+            || self.endpoint.starts_with("http://127.0.0.1"))
+        {
+            return Some(format!(
+                "AI_ENDPOINT must use https:// (plain http is only allowed for localhost): {}",
+                self.endpoint
+            ));
+        }
+        None
+    }
+}
+
+/// Accepts a base URL such as `http://localhost:20128/v1` (what most
+/// gateways show) as well as the full `.../chat/completions` URL.
+fn chat_completions_url(url: &str) -> String {
+    let url = url.trim().trim_end_matches('/');
+    if url.ends_with("/chat/completions") {
+        url.to_string()
+    } else {
+        format!("{url}/chat/completions")
     }
 }
 
@@ -209,19 +310,49 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_claude() {
-        let c = config(&[("ANTHROPIC_API_KEY", "sk-test")]).unwrap();
-        assert_eq!(c.provider, ProviderKind::Anthropic);
-        assert_eq!(c.model, "claude-opus-5-5");
-        assert_eq!(c.endpoint, DEFAULT_ANTHROPIC_ENDPOINT);
+    fn defaults_to_free_gemini() {
+        let c = config(&[("GEMINI_API_KEY", "g-test")]).unwrap();
+        assert_eq!(c.provider, ProviderKind::Gemini);
+        assert_eq!(c.model, DEFAULT_GEMINI_MODEL);
+        assert_eq!(c.endpoint, DEFAULT_GEMINI_ENDPOINT);
+        assert_eq!(c.api_key.expose(), "g-test");
         assert_eq!(c.timeout, Duration::from_secs(25));
         assert!(c.problem().is_none());
     }
 
     #[test]
+    fn provider_follows_the_key_that_is_set() {
+        let c = config(&[("ANTHROPIC_API_KEY", "sk-test")]).unwrap();
+        assert_eq!(c.provider, ProviderKind::Anthropic);
+        assert_eq!(c.model, "claude-opus-5-5");
+        let c = config(&[("OMNIROUTE_API_KEY", "o-test")]).unwrap();
+        assert_eq!(c.provider, ProviderKind::OmniRoute);
+        let c = config(&[("OPENROUTER_API_KEY", "r-test")]).unwrap();
+        assert_eq!(c.provider, ProviderKind::OpenRouter);
+    }
+
+    #[test]
     fn missing_key_is_a_controlled_problem() {
         let c = config(&[]).unwrap();
+        assert_eq!(c.provider, ProviderKind::Gemini);
+        assert!(c.problem().unwrap().contains("GEMINI_API_KEY"));
+        let c = config(&[("AI_PROVIDER", "anthropic")]).unwrap();
         assert!(c.problem().unwrap().contains("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn omniroute_runs_locally_and_needs_a_model() {
+        let c = config(&[("AI_PROVIDER", "omniroute")]).unwrap();
+        assert_eq!(c.endpoint, DEFAULT_OMNIROUTE_ENDPOINT);
+        assert!(c.problem().unwrap().contains("AI_MODEL"));
+        let c = config(&[
+            ("AI_PROVIDER", "omniroute"),
+            ("AI_MODEL", "free-combo"),
+            ("AI_ENDPOINT", "http://localhost:20128/v1/"),
+        ])
+        .unwrap();
+        assert_eq!(c.endpoint, "http://localhost:20128/v1/chat/completions");
+        assert!(c.problem().is_none()); // no key needed
     }
 
     #[test]

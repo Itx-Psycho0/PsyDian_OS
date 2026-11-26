@@ -36,10 +36,10 @@ impl Telemetry {
 
     pub fn event(&self, text: &str) {
         let line = format!("{} {}\n", timestamp(), one_line(text));
-        if let Ok(mut file) = self.file.lock() {
-            if let Some(file) = file.as_mut() {
-                let _ = file.write_all(line.as_bytes());
-            }
+        if let Ok(mut file) = self.file.lock()
+            && let Some(file) = file.as_mut()
+        {
+            let _ = file.write_all(line.as_bytes());
         }
     }
 

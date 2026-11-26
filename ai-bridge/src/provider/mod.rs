@@ -89,7 +89,10 @@ pub trait Provider: Send {
 pub fn from_config(config: &Config) -> Box<dyn Provider> {
     match config.provider {
         ProviderKind::Anthropic => Box::new(anthropic::Anthropic::new(config)),
-        ProviderKind::OpenAiCompatible => Box::new(openai::OpenAiCompatible::new(config)),
+        ProviderKind::Gemini
+        | ProviderKind::OmniRoute
+        | ProviderKind::OpenRouter
+        | ProviderKind::OpenAiCompatible => Box::new(openai::OpenAiCompatible::new(config)),
         ProviderKind::Mock => Box::new(mock::Mock),
     }
 }
@@ -119,6 +122,8 @@ pub(crate) fn http_error(error: ureq::Error) -> ProviderError {
                 .unwrap_or_else(|| format!("HTTP {code}"));
             match code {
                 401 | 403 => ProviderError::Auth,
+                // Gemini answers a wrong key with 400 "API key not valid".
+                400 if detail.contains("API key") => ProviderError::Auth,
                 408 => ProviderError::Timeout,
                 429 => ProviderError::RateLimited,
                 400 | 404 | 413 | 422 => ProviderError::BadRequest(detail),
