@@ -1,0 +1,15 @@
+[package]
+name = "ai-bridge"
+version = "0.1.0"
+edition = "2024"
+description = "Host-side AI Bridge for Psydian: answers the kernel's ai requests with an external AI service"
+publish = false
+
+# A separate workspace: the bridge is a normal host program and must not be
+# built for the kernel's bare-metal target.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ureq = { version = "2.12", features = ["json"] }
