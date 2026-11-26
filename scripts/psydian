@@ -31,8 +31,10 @@ usage: psydian [command]
   (none) / run   boot Psydian: QEMU window plus this terminal as the serial
                  console; without a display, only the terminal
   headless       boot with the serial console only (no window)
-  ai [--window]  boot with the real AI Bridge (needs ANTHROPIC_API_KEY, or
-                 AI_PROVIDER=ollama for a local model); --window opens QEMU
+  ai [--window]  boot with the real AI Bridge (free Gemini, OmniRoute,
+                 OpenRouter or Ollama; run 'psydian ai-setup' first);
+                 --window opens QEMU
+  ai-setup       choose the AI service and save its key (once)
   ai-check       AI Bridge self-test: real kernel + bridge, no API key needed
   demo           boot headless with a mock AI Bridge, so `ai` gets answers
   check          end-to-end smoke test with the mock AI Bridge (~30 s)
@@ -47,12 +49,63 @@ EOF
 }
 
 # The AI Bridge (ai-bridge/) is a separate Rust program on the host.
+AI_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/psydian/ai.env"
+
 bridge() {
   if [ ! -f "$REPO/ai-bridge/Cargo.toml" ]; then
     echo "psydian: the AI Bridge (ai-bridge/) is not in this version yet; try 'psydian demo'." >&2
     exit 1
   fi
+  # Saved settings from 'psydian ai-setup'; variables already set win.
+  if [ -f "$AI_ENV" ]; then
+    while IFS='=' read -r name value; do
+      case "$name" in
+        AI_*|GEMINI_API_KEY|GOOGLE_API_KEY|OMNIROUTE_API_KEY|OPENROUTER_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY)
+          if [ -z "${!name:-}" ]; then export "$name=$value"; fi ;;
+      esac
+    done < "$AI_ENV"
+  fi
   exec cargo run --quiet --manifest-path "$REPO/ai-bridge/Cargo.toml" -- "$@"
+}
+
+ai_setup() {
+  echo "Which AI service should answer Psydian's 'ai' questions?"
+  echo "  1) Gemini      free API key from https://aistudio.google.com/apikey (recommended)"
+  echo "  2) OmniRoute   your own OmniRoute gateway (default http://localhost:20128/v1)"
+  echo "  3) OpenRouter  free ':free' models, key from https://openrouter.ai/keys"
+  echo "  4) Ollama      a local model, no key (run 'ollama pull llama3.2' first)"
+  echo "  5) Claude      paid Anthropic API key"
+  read -rp "Choice [1]: " choice
+  local provider key_var="" model="" endpoint=""
+  case "${choice:-1}" in
+    1) provider=gemini; key_var=GEMINI_API_KEY ;;
+    2) provider=omniroute; key_var=OMNIROUTE_API_KEY
+       read -rp "OmniRoute URL [http://localhost:20128/v1]: " endpoint
+       read -rp "Model or combo name (from the OmniRoute dashboard): " model ;;
+    3) provider=openrouter; key_var=OPENROUTER_API_KEY
+       read -rp "Model [meta-llama/llama-3.3-70b-instruct:free]: " model
+       model="${model:-meta-llama/llama-3.3-70b-instruct:free}" ;;
+    4) provider=ollama
+       read -rp "Model [llama3.2]: " model ;;
+    5) provider=anthropic; key_var=ANTHROPIC_API_KEY ;;
+    *) echo "psydian: unknown choice '$choice'" >&2; exit 2 ;;
+  esac
+  local key=""
+  if [ -n "$key_var" ]; then
+    read -rsp "API key (input hidden; empty for none): " key; echo
+  fi
+  mkdir -p "$(dirname "$AI_ENV")"
+  (
+    umask 077
+    {
+      echo "AI_PROVIDER=$provider"
+      if [ -n "$model" ]; then echo "AI_MODEL=$model"; fi
+      if [ -n "$endpoint" ]; then echo "AI_ENDPOINT=$endpoint"; fi
+      if [ -n "$key" ]; then echo "$key_var=$key"; fi
+    } > "$AI_ENV"
+  )
+  chmod 600 "$AI_ENV"
+  echo "Saved to $AI_ENV (only you can read it). Start with: psydian ai"
 }
 
 case "${1:-run}" in
@@ -61,6 +114,7 @@ case "${1:-run}" in
   headless) exec cargo run --quiet -- --headless ;;
   ai)       shift; bridge "$@" ;;
   ai-check) bridge --check ;;
+  ai-setup) ai_setup ;;
   demo)     exec python3 scripts/mock-bridge.py ;;
   check)    exec python3 scripts/mock-bridge.py --check ;;
   test)     exec cargo ktest ;;

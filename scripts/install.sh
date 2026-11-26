@@ -217,7 +217,8 @@ ${GREEN}${BOLD}Psydian is installed.${RESET}
 
   psydian            boot Psydian (QEMU window if you have a display, else in this terminal)
   psydian demo       boot with a mock AI Bridge: try 'ai hello', then 'run 1'
-  psydian ai         boot with the real AI Bridge (set ANTHROPIC_API_KEY first)
+  psydian ai-setup   choose a free AI service (Gemini, OmniRoute, ...) once
+  psydian ai         boot with the real AI Bridge
   psydian check      quick end-to-end test (about 30 seconds)
   psydian test       run the full kernel test suite
   psydian update     download the latest version and rebuild
