@@ -51,9 +51,12 @@ class Bridge:
         threading.Thread(target=self._read_kernel, daemon=True).start()
 
     # ---- talking to the kernel -------------------------------------------
-    def send_frame(self, message):
+    def send_frame(self, message, fresh_line=True):
+        """`fresh_line` puts a line break first so the marker starts a line;
+        it is left out at the prompt, where it would show an empty line."""
         body = json.dumps(message, ensure_ascii=True, separators=(",", ":"))
-        self._write(("\n" + FRAME_MARKER + body + "\n").encode("ascii"))
+        prefix = "\n" if fresh_line else ""
+        self._write((prefix + FRAME_MARKER + body + "\n").encode("ascii"))
 
     def type_line(self, text):
         """Sends one line as if typed; `cancel` sends Ctrl+C."""
@@ -172,7 +175,7 @@ class Bridge:
             self.diagnostics[frame["id"]] = frame
         elif kind == "status" and frame["payload"].get("state") == "ready":
             self.send_frame({"type": "status", "version": 1, "id": "stat-001",
-                             "payload": {"state": "bridge_ready"}})
+                             "payload": {"state": "bridge_ready"}}, fresh_line=False)
             self.say("connected - the kernel is ready.")
         elif kind == "ai_request":
             threading.Timer(ANSWER_DELAY_S, self.answer, [frame]).start()
