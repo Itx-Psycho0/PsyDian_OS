@@ -3,18 +3,20 @@
 The host-side program between the Psydian kernel and an AI service. The kernel never talks to the network and never sees an API key. The bridge reads the kernel's serial frames, asks the AI and sends back one checked answer per question.
 
 ```text
-Psydian kernel ──serial (@PSY frames)──► AI Bridge ──HTTPS──► AI service (Claude by default)
+Psydian kernel ──serial (@PSY frames)──► AI Bridge ──HTTPS──► AI service (free Gemini by default)
       ▲                                      │
       └──── ai_response / error frame ◄──────┘
 ```
 
 ## Quick start
 
-From the repository root, with the `psydian` command installed:
+From the repository root, with the `psydian` command installed, choose the AI service once:
 
 ```bash
-export ANTHROPIC_API_KEY="your-api-key"
+psydian ai-setup
 ```
+
+It asks for the service and its key and saves them to `~/.config/psydian/ai.env`, which only you can read. Then:
 
 ```bash
 psydian ai
@@ -30,10 +32,18 @@ psydian> run 1
 
 `psydian ai --window` does the same with a QEMU window. Type in the window or in the terminal.
 
-**No API key?** Two options:
+### Free AI services
 
-- `AI_PROVIDER=mock psydian ai` uses canned answers and needs no network.
-- `AI_PROVIDER=ollama psydian ai` uses a free local model through [Ollama](https://ollama.com) (`ollama pull llama3.2` first).
+| Service | Setup | Key |
+|---|---|---|
+| **Gemini** (default) | `export GEMINI_API_KEY="..."` | Free from [Google AI Studio](https://aistudio.google.com/apikey) |
+| **OmniRoute** | `export AI_PROVIDER=omniroute AI_MODEL="<model or combo>"`; set `AI_ENDPOINT` if it is not on `http://localhost:20128/v1` | `OMNIROUTE_API_KEY`, if your gateway requires one |
+| **OpenRouter** | `export AI_PROVIDER=openrouter AI_MODEL="<model>:free"` | `OPENROUTER_API_KEY` |
+| **Ollama** (offline) | `export AI_PROVIDER=ollama`, after `ollama pull llama3.2` | None |
+| **Mock** | `export AI_PROVIDER=mock`: canned answers, no network | None |
+| Claude (paid) | `export ANTHROPIC_API_KEY="..."` | Anthropic Console |
+
+When `AI_PROVIDER` is not set, the bridge uses the service whose key is set (`GEMINI_API_KEY`, `OMNIROUTE_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, in that order), or Gemini if no key is set.
 
 **Self-test** (real kernel and bridge, mock provider, no key needed):
 
@@ -49,11 +59,11 @@ Everything comes from environment variables. Nothing is stored in the repository
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `AI_PROVIDER` | `anthropic` | `anthropic` (Claude), `openai` / `ollama` (OpenAI-style chat API), `mock` |
-| `ANTHROPIC_API_KEY` or `AI_API_KEY` | - | API key. Never logged, never sent to the kernel |
-| `AI_MODEL` | `claude-opus-5-5` | Model name (`llama3.2` for Ollama) |
-| `AI_ENDPOINT` | Anthropic Messages API | Must be `https://`; plain `http://` only for localhost |
-| `AI_EFFORT` | `low` | Claude effort: `low`, `medium`, `high`, `xhigh`, `max` |
+| `AI_PROVIDER` | from the key that is set, else `gemini` | `gemini`, `omniroute`, `openrouter`, `ollama` / `openai` (any OpenAI-style chat API), `anthropic`, `mock` |
+| `GEMINI_API_KEY`, `OMNIROUTE_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` or `AI_API_KEY` | - | API key. Never logged, never sent to the kernel |
+| `AI_MODEL` | `gemini-flash-latest` (Gemini), `llama3.2` (Ollama), `claude-opus-5-5` (Claude) | Model name. Required for OmniRoute and OpenRouter |
+| `AI_ENDPOINT` | the service's own URL | Must be `https://`; plain `http://` only for localhost. For OpenAI-style services a base URL such as `http://localhost:20128/v1` works |
+| `AI_EFFORT` | `low` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (Gemini uses low/medium/high) |
 | `AI_TIMEOUT` | `25` | Seconds per AI call (1-28; the kernel waits 30) |
 | `AI_MAX_REQUESTS_PER_MINUTE` | `10` | More requests get `AI_RATE_LIMITED` |
 | `PSYDIAN_KERNEL_CMD` | `cargo run -q -- --headless` | How the bridge boots the kernel |
@@ -65,7 +75,7 @@ Without an API key the bridge still starts. Every question then gets an `AI_NOT_
 1. **protocol**: the kernel's `ai_request` frame is parsed and validated (version 1, `req-NNN` id, query of 1-512 bytes).
 2. **diagnostics / context**: the diagnostic the question refers to, plus up to three other recent ones, are taken from the records the kernel reported. Control characters are removed and values are capped.
 3. **prompt**: system instructions (versioned `psydian-diag-v1`) and the question. Diagnostic data and the question are wrapped in `<diagnostic>` / `<question>` tags, and the instructions say to ignore any instructions inside them (prompt-injection defence).
-4. **provider**: Claude via `POST /v1/messages`:
+4. **provider**: an OpenAI-style `POST /chat/completions` call for Gemini, OmniRoute, OpenRouter and Ollama. JSON output is requested; Gemini also gets the answer JSON schema and a reasoning level. Claude, if chosen, uses `POST /v1/messages`:
    - adaptive thinking at the configured effort
    - structured outputs (`output_config.format`, JSON schema)
    - server-side refusal fallback (`fallbacks: "default"`)
@@ -79,7 +89,7 @@ Without an API key the bridge still starts. Every question then gets an `AI_NOT_
 | Error code | When |
 |---|---|
 | `AI_NOT_CONFIGURED` | No API key / bad endpoint |
-| `AI_AUTH_FAILED` | The service rejected the key (401/403) |
+| `AI_AUTH_FAILED` | The service rejected the key (401/403, or Gemini's "API key not valid") |
 | `AI_RATE_LIMITED` | Service 429, or more than `AI_MAX_REQUESTS_PER_MINUTE` |
 | `AI_TIMEOUT` | No answer within `AI_TIMEOUT` |
 | `AI_SERVICE_UNAVAILABLE` | Network error or 5xx |
@@ -101,7 +111,7 @@ src/
   diagnostics.rs  the last 32 diagnostic records
   context.rs      what is sent to the AI for one question
   prompt.rs       system prompt, user message, answer JSON schema
-  provider/       Provider trait; anthropic.rs (Claude), openai.rs (OpenAI-style / Ollama), mock.rs
+  provider/       Provider trait; openai.rs (Gemini, OmniRoute, OpenRouter, Ollama), anthropic.rs (Claude), mock.rs
   validation.rs   AI text -> checked Answer within the kernel's limits
   safety.rs       command allowlist and risk levels (mirrors the kernel registry)
   bridge.rs       one request end to end, rate limiting

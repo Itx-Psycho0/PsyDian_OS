@@ -24,7 +24,8 @@ Then:
 |---|---|
 | `psydian` | Boot Psydian (QEMU window if there is a display, otherwise in the terminal) |
 | `psydian demo` | Boot with a mock AI Bridge: try `ai hello`, then `run 1` |
-| `psydian ai` | Boot with the real AI Bridge (`ai-bridge/`): set `ANTHROPIC_API_KEY` first, or use `AI_PROVIDER=ollama` for a free local model. Add `--window` for a QEMU window |
+| `psydian ai-setup` | Choose the AI service once: free Gemini (default), OmniRoute, OpenRouter or a local Ollama model. Saves the key to `~/.config/psydian/ai.env` |
+| `psydian ai` | Boot with the real AI Bridge (`ai-bridge/`). Add `--window` for a QEMU window |
 | `psydian ai-check` | AI Bridge self-test with the real kernel (no API key needed) |
 | `psydian check` | End-to-end smoke test (about 30 seconds) |
 | `psydian test` | Full kernel test suite |
@@ -43,9 +44,9 @@ Inside Psydian, type `help` to list the shell commands and `shutdown` to quit.
 | 3 | Exceptions, interrupts, paging, heap | Done |
 | 4 | Keyboard and serial input, shell | Done |
 | 5 | Logger levels, diagnostics, panic handling, message protocol | Done |
-| 6 | Host-side AI Bridge | In progress (kernel side done: receiving and validating `ai_response` frames) |
-| 7 | External AI integration and safety validation | In progress (kernel side done: risk levels and `run` for AI-suggested commands) |
-| 8 | Integration, testing, demo | Not started |
+| 6 | Host-side AI Bridge | Done |
+| 7 | External AI integration and safety validation | Done (free Gemini, OmniRoute, OpenRouter, Ollama; Claude optional) |
+| 8 | Integration, testing, demo | In progress (one-command installer, CI and end-to-end self-tests done; demo website and final report left) |
 
 ## Manual setup
 
