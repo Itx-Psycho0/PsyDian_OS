@@ -31,6 +31,9 @@ usage: psydian [command]
   (none) / run   boot Psydian: QEMU window plus this terminal as the serial
                  console; without a display, only the terminal
   headless       boot with the serial console only (no window)
+  ai [--window]  boot with the real AI Bridge (needs ANTHROPIC_API_KEY, or
+                 AI_PROVIDER=ollama for a local model); --window opens QEMU
+  ai-check       AI Bridge self-test: real kernel + bridge, no API key needed
   demo           boot headless with a mock AI Bridge, so `ai` gets answers
   check          end-to-end smoke test with the mock AI Bridge (~30 s)
   test           full kernel test suite inside QEMU (cargo ktest)
@@ -43,10 +46,21 @@ Inside Psydian type 'help' for the shell commands and 'shutdown' to quit.
 EOF
 }
 
+# The AI Bridge (ai-bridge/) is a separate Rust program on the host.
+bridge() {
+  if [ ! -f "$REPO/ai-bridge/Cargo.toml" ]; then
+    echo "psydian: the AI Bridge (ai-bridge/) is not in this version yet; try 'psydian demo'." >&2
+    exit 1
+  fi
+  exec cargo run --quiet --manifest-path "$REPO/ai-bridge/Cargo.toml" -- "$@"
+}
+
 case "${1:-run}" in
   run)
     if has_display; then exec cargo run --quiet; else exec cargo run --quiet -- --headless; fi ;;
   headless) exec cargo run --quiet -- --headless ;;
+  ai)       shift; bridge "$@" ;;
+  ai-check) bridge --check ;;
   demo)     exec python3 scripts/mock-bridge.py ;;
   check)    exec python3 scripts/mock-bridge.py --check ;;
   test)     exec cargo ktest ;;
@@ -54,6 +68,7 @@ case "${1:-run}" in
   update)
     git pull --ff-only
     cargo build --quiet
+    if [ -f ai-bridge/Cargo.toml ]; then cargo build --quiet --manifest-path ai-bridge/Cargo.toml; fi
     echo "Psydian is up to date ($(git log -1 --format='%h %s'))." ;;
   where)    echo "$REPO" ;;
   help|-h|--help) usage ;;
