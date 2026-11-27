@@ -126,7 +126,7 @@ mod tests {
     fn gemini_gets_the_answer_schema() {
         let p = provider(&[("GEMINI_API_KEY", "g-test")]);
         let body = p.request_body("sys", "user");
-        assert_eq!(body["model"], "gemini-flash-latest");
+        assert_eq!(body["model"], "gemini-flash-lite-latest");
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(
             body["response_format"]["json_schema"]["schema"],

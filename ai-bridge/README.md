@@ -61,7 +61,7 @@ Everything comes from environment variables. Nothing is stored in the repository
 |---|---|---|
 | `AI_PROVIDER` | from the key that is set, else `gemini` | `gemini`, `omniroute`, `openrouter`, `ollama` / `openai` (any OpenAI-style chat API), `anthropic`, `mock` |
 | `GEMINI_API_KEY`, `OMNIROUTE_API_KEY`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` or `AI_API_KEY` | - | API key. Never logged, never sent to the kernel |
-| `AI_MODEL` | `gemini-flash-latest` (Gemini), `llama3.2` (Ollama), `claude-opus-5-5` (Claude) | Model name. Required for OmniRoute and OpenRouter |
+| `AI_MODEL` | `gemini-flash-lite-latest` (Gemini), `llama3.2` (Ollama), `claude-opus-5-5` (Claude) | Model name. Required for OmniRoute and OpenRouter |
 | `AI_ENDPOINT` | the service's own URL | Must be `https://`; plain `http://` only for localhost. For OpenAI-style services a base URL such as `http://localhost:20128/v1` works |
 | `AI_EFFORT` | `low` | Reasoning effort: `low`, `medium`, `high`, `xhigh`, `max` (Gemini uses low/medium/high) |
 | `AI_TIMEOUT` | `25` | Seconds per AI call (1-28; the kernel waits 30) |
