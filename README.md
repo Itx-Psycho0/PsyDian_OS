@@ -2,7 +2,9 @@
 
 **An AI-assisted operating-system prototype written in Rust for x86_64.**
 
-Psydian is a small bare-metal kernel that boots in QEMU, gives you an interactive shell, and turns kernel failures into structured diagnostic records. A host-side AI Bridge (in progress) will read those records over the serial port and ask an external AI service to explain them. The AI layer never runs inside the kernel and never executes commands on its own.
+Website: **[itx-psycho0.github.io/PsyDian_OS](https://itx-psycho0.github.io/PsyDian_OS/)**
+
+Psydian is a small bare-metal kernel that boots in QEMU, gives you an interactive shell, and turns kernel failures into structured diagnostic records. A host-side AI Bridge reads those records over the serial port and asks an external AI service to explain them. The AI layer never runs inside the kernel and never executes commands on its own.
 
 ```text
 User -> Psydian shell -> kernel -> diagnostic record -> serial channel -> AI Bridge -> AI service
