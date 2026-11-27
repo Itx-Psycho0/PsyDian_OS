@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Psydian OS</title>
 <meta name="description" content="Psydian is a small operating system written from scratch in Rust that explains its own failures with the help of an AI, without ever giving the AI control.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f5d50'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='17' font-weight='700' text-anchor='middle' fill='%23f6f2ea'%3E%CF%88%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -40,8 +39,7 @@
 
   /* nav */
   nav { display: flex; align-items: center; justify-content: space-between; padding: 22px 0; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--ink); text-decoration: none; letter-spacing: -0.2px; }
-  .brand .mark { width: 28px; height: 28px; border-radius: 7px; background: var(--accent); color: var(--paper); display: grid; place-items: center; font-family: var(--mono); font-weight: 600; font-size: 16px; }
+  .brand { font-family: var(--serif); font-size: 22px; font-weight: 500; color: var(--ink); text-decoration: none; letter-spacing: -0.3px; }
   .links { display: flex; gap: 26px; font-size: 15px; }
   .links a { color: var(--ink-2); text-decoration: none; }
   .links a:hover { color: var(--ink); }
@@ -169,7 +167,7 @@
 
 <header class="wrap">
   <nav>
-    <a class="brand" href="#top"><span class="mark">&psi;</span>Psydian OS</a>
+    <a class="brand" href="#top">Psydian OS</a>
     <div class="links">
       <a href="#about" class="hide-sm">About</a>
       <a href="#how" class="hide-sm">How it works</a>
