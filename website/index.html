@@ -47,7 +47,6 @@
   /* hero */
   .hero { display: grid; grid-template-columns: 1fr 1.08fr; gap: 56px; align-items: center; padding: 56px 0 88px; }
   .hero > div, .split > div, .flow > *, .step > div { min-width: 0; }
-  .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--accent); letter-spacing: .4px; margin: 0 0 18px; }
   h1 { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 5.2vw, 62px); line-height: 1.04; letter-spacing: -1.2px; margin: 0 0 22px; }
   h1 em { font-style: italic; color: var(--accent); }
   .lede { color: var(--ink-2); font-size: 18.5px; max-width: 30em; margin: 0 0 32px; }
@@ -180,7 +179,6 @@
 <main id="top">
   <div class="wrap hero">
     <div>
-      <p class="eyebrow">x86-64 &middot; Rust &middot; no_std &middot; college prototype</p>
       <h1>An operating system that can <em>explain</em> its own failures.</h1>
       <p class="lede">Psydian is a small kernel written from scratch in Rust. When something breaks, it records what happened, and you can ask an AI why, in plain English. The AI can suggest commands, but it can never run them.</p>
       <div class="install" id="install-hero">
@@ -200,7 +198,7 @@
     <div class="wrap">
       <p class="kicker">About</p>
       <h2>A real kernel, with an assistant that stays outside it.</h2>
-      <p class="intro">Psydian boots on bare x86-64 hardware (or QEMU) and gives you a simple shell. It was built as a college project to explore one question: how can AI help with low-level failures without being trusted with the system?</p>
+      <p class="intro">Psydian boots on bare x86-64 hardware (or QEMU) and gives you a simple shell. It is a prototype built to explore one question: how can AI help with low-level failures without being trusted with the system?</p>
       <div class="points">
         <div class="point reveal"><span class="n">01</span><div><h3>Written from scratch</h3><p>Descriptor tables, interrupts, paging, a kernel heap, keyboard and serial input, and a shell. No borrowed operating system underneath.</p></div></div>
         <div class="point reveal"><span class="n">02</span><div><h3>Failures become records</h3><p>Faults are caught and turned into structured diagnostics, with a code, a subsystem and context, instead of a frozen screen.</p></div></div>
@@ -284,7 +282,7 @@
 
 <footer>
   <div class="wrap">
-    <span>Psydian OS &middot; a college prototype</span>
+    <span>Psydian OS &middot; prototype</span>
     <span><a href="https://github.com/Itx-Psycho0/PsyDian_OS">Source on GitHub</a> &middot; <a href="https://github.com/Itx-Psycho0/PsyDian_OS/blob/main/scripts/install.sh">install.sh</a></span>
   </div>
 </footer>
