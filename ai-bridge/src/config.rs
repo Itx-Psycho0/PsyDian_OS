@@ -136,7 +136,7 @@ pub struct Config {
 
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
-pub const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-latest";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-flash-lite-latest";
 pub const DEFAULT_GEMINI_ENDPOINT: &str =
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 pub const DEFAULT_OMNIROUTE_ENDPOINT: &str = "http://localhost:20128/v1/chat/completions";

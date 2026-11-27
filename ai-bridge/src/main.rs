@@ -53,7 +53,7 @@ Configuration (environment):
                  (gemini when none is)
   GEMINI_API_KEY, OMNIROUTE_API_KEY, OPENROUTER_API_KEY,
   ANTHROPIC_API_KEY or AI_API_KEY   the API key (never logged)
-  AI_MODEL       default gemini-flash-latest (gemini), llama3.2 (ollama),
+  AI_MODEL       default gemini-flash-lite-latest (gemini), llama3.2 (ollama),
                  claude-opus-5-5 (anthropic); omniroute and openrouter
                  need one
   AI_ENDPOINT    API URL (https, or http://localhost for local services);
